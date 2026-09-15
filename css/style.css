@@ -1,20 +1,37 @@
 /* ============================================
-   Satoru Home — 黑白冰蓝 / 清爽优雅
+   Satoru Home — 晴空
+   瞳の中に空が広がっている：瞳孔里有一整片天
+   底色是白昼的天光，不是夜里的灯。
    ============================================ */
 
 :root {
-  --ink: #0b0f14;
-  --ink-soft: #1a2029;
-  --paper: #f7fafc;
-  --ice: #7fd8ff;
-  --ice-deep: #2ea8e0;
-  --ice-glow: rgba(127, 216, 255, 0.35);
-  --grey: #8a97a6;
-  --line: rgba(127, 216, 255, 0.18);
-  --radius: 14px;
-  --shadow: 0 10px 40px rgba(11, 15, 20, 0.45);
+  /* 基底：高原晴天的天光。冷白偏蓝，不是米白 */
+  --sky: #eef4f9;
+  --sky-2: #e4edf6;
+  --sky-3: #d6e5f2;
+  --paper: #ffffff;
+
+  /* 蓝：晴空本身的色，从深处到远处 */
+  --blue: #2f7fb8;
+  --blue-deep: #17516f;
+  --blue-light: #6fb6dd;
+  --blue-haze: #b9dcf0;
+  --blue-veil: rgba(47, 127, 184, 0.08);
+
+  /* 文字：深蓝灰，压在浅天光上 */
+  --ink: #16303f;
+  --ink-2: #3c5a6b;
+  --ash: #63808f;
+  --seam: rgba(47, 127, 184, 0.16);
+  --seam-soft: rgba(47, 127, 184, 0.09);
+
+  --radius: 3px;
+  --wrap: 1080px;
+  --gutter: 24px;
+
   --font: "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 * {
@@ -28,21 +45,38 @@ html {
 body {
   margin: 0;
   font-family: var(--font);
-  background: var(--ink);
-  color: var(--paper);
-  line-height: 1.75;
+  background: var(--sky);
+  color: var(--ink-2);
+  line-height: 1.85;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
 
-/* 背景冰蓝光晕 */
+/* ---------- 晴空本身：光从上方高处洒下，远景泛白 ---------- */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(circle at 12% 8%, rgba(127, 216, 255, 0.13), transparent 42%),
-    radial-gradient(circle at 88% 92%, rgba(46, 168, 224, 0.1), transparent 46%);
+    /* 高处天顶：最亮的白，像正午的顶光 */
+    radial-gradient(
+      ellipse 90% 60% at 50% -14%,
+      rgba(255, 255, 255, 0.92),
+      rgba(255, 255, 255, 0.4) 44%,
+      transparent 74%
+    ),
+    /* 右远处：天空的纵深处，越远越淡 */
+    radial-gradient(
+      ellipse 70% 70% at 96% 34%,
+      rgba(185, 220, 240, 0.55),
+      transparent 68%
+    ),
+    /* 左下：贴近地面的冷蓝，增加空气厚度 */
+    radial-gradient(
+      ellipse 80% 50% at 4% 104%,
+      rgba(214, 229, 242, 0.85),
+      transparent 70%
+    );
   pointer-events: none;
   z-index: 0;
 }
@@ -52,203 +86,392 @@ header {
   position: sticky;
   top: 0;
   z-index: 100;
-  backdrop-filter: blur(14px);
-  background: rgba(11, 15, 20, 0.72);
-  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(16px);
+  background: rgba(238, 244, 249, 0.78);
+  border-bottom: 1px solid var(--seam-soft);
 }
 
 nav {
-  max-width: 1080px;
+  max-width: var(--wrap);
   margin: 0 auto;
-  padding: 16px 24px;
+  padding: 18px var(--gutter);
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: 30px;
   flex-wrap: wrap;
 }
 
 .brand {
   font-weight: 700;
-  letter-spacing: 0.06em;
-  font-size: 1.05rem;
-  color: var(--paper);
+  letter-spacing: 0.14em;
+  font-size: 0.9rem;
+  color: var(--ink);
   margin-right: auto;
+  font-family: var(--mono);
 }
 
 .brand .dot {
-  color: var(--ice);
-  text-shadow: 0 0 12px var(--ice-glow);
+  color: var(--blue);
 }
 
 nav a {
-  color: var(--grey);
+  color: var(--ash);
   text-decoration: none;
-  font-size: 0.94rem;
-  letter-spacing: 0.03em;
-  padding: 4px 2px;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  padding: 4px 0;
+  position: relative;
   transition: color 0.25s ease;
+}
+
+/* 当前页：底部一条蓝线，不发光 */
+nav a::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 100%;
+  bottom: 0;
+  height: 1px;
+  background: var(--blue);
+  transition: right 0.3s ease;
 }
 
 nav a:hover,
 nav a.active {
-  color: var(--ice);
+  color: var(--ink);
+}
+
+nav a:hover::after,
+nav a.active::after {
+  right: 0;
+}
+
+/* 移动端导航开关 */
+.nav-toggle {
+  display: none;
+  background: none;
+  border: 1px solid var(--seam);
+  border-radius: var(--radius);
+  color: var(--blue);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 8px 12px;
+  margin-left: auto;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.nav-toggle:hover {
+  border-color: var(--blue);
+  background: var(--blue-veil);
+}
+
+.nav-toggle:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  flex-wrap: wrap;
 }
 
 /* ---------- 布局 ---------- */
 main {
   position: relative;
   z-index: 1;
-  max-width: 1080px;
+  max-width: calc(var(--wrap) + var(--gutter) * 2);
   margin: 0 auto;
-  padding: 0 24px 100px;
+  padding: 0 var(--gutter) 110px;
 }
 
 section {
-  padding: 72px 0 24px;
+  padding: 82px 0 20px;
 }
 
 .page-head {
-  padding: 96px 0 24px;
+  padding: 104px 0 20px;
+}
+
+.story p,
+.lede,
+.card p,
+footer p {
+  overflow-wrap: break-word;
 }
 
 h1 {
-  font-size: clamp(2rem, 6vw, 3.4rem);
-  line-height: 1.15;
-  margin: 0 0 18px;
-  letter-spacing: -0.01em;
+  font-size: clamp(1.9rem, 7.4vw, 3.9rem);
+  line-height: 1.16;
+  margin: 0 0 26px;
+  letter-spacing: -0.035em;
+  color: var(--ink);
+  font-weight: 700;
+  max-width: 20ch;
 }
 
+/* 标题不发光：用颜色深浅说话 */
 h1 .accent {
-  color: var(--ice);
-  text-shadow: 0 0 26px var(--ice-glow);
+  color: var(--blue-deep);
+}
+
+h1 .dim {
+  color: var(--ash);
+  font-weight: 400;
 }
 
 h2 {
-  font-size: 1.35rem;
-  margin: 0 0 22px;
-  color: var(--paper);
-  letter-spacing: 0.02em;
+  font-size: clamp(1.05rem, 4.2vw, 1.25rem);
+  margin: 0 0 26px;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
-h2::before {
+h2::after {
   content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ice);
-  box-shadow: 0 0 12px var(--ice);
-  margin-right: 12px;
-  vertical-align: middle;
-  transform: translateY(-2px);
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, var(--seam), transparent);
 }
 
 h3 {
-  font-size: 1.06rem;
-  margin: 0 0 10px;
-  color: var(--paper);
+  font-size: 1.02rem;
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 p {
-  color: #c6d2de;
-  margin: 0 0 16px;
+  color: var(--ink-2);
+  margin: 0 0 18px;
 }
 
 .lede {
-  font-size: 1.1rem;
-  color: #d6e2ec;
-  max-width: 62ch;
+  font-size: 1.06rem;
+  color: var(--ink-2);
+  max-width: 46ch;
+  line-height: 1.9;
+}
+
+/* 长文正文限宽，视线不用横向冲刺 */
+.story p,
+.timeline .post p {
+  max-width: 68ch;
 }
 
 .muted {
-  color: var(--grey);
-  font-size: 0.92rem;
+  color: var(--ash);
+  font-size: 0.9rem;
+  line-height: 1.8;
 }
 
-/* ---------- 卡片 ---------- */
+/* ---------- 无卡片：留白与细线分隔 ---------- */
 .grid {
   display: grid;
-  gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  border-top: 1px solid var(--seam);
 }
 
 .card {
-  background: linear-gradient(
-    160deg,
-    rgba(26, 32, 41, 0.9),
-    rgba(15, 20, 27, 0.9)
-  );
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 26px 24px;
-  transition: transform 0.3s ease, border-color 0.3s ease,
-    box-shadow 0.3s ease;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--seam);
+  border-radius: 0;
+  padding: 26px 30px 26px 0;
+  position: relative;
+  transition: none;
 }
 
-.card:hover {
-  transform: translateY(-4px);
-  border-color: rgba(127, 216, 255, 0.45);
-  box-shadow: 0 14px 40px rgba(127, 216, 255, 0.1);
+/* 悬停时左侧一线蓝，而不是整块浮起 */
+.card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 24px;
+  bottom: 24px;
+  width: 1px;
+  background: var(--blue);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.card:hover::before {
+  opacity: 1;
 }
 
 /* ---------- 英雄区 ---------- */
 .hero {
   display: grid;
-  gap: 40px;
-  grid-template-columns: 1.4fr 1fr;
-  align-items: center;
-  padding: 78px 0 30px;
+  gap: 48px;
+  grid-template-columns: 1fr 320px;
+  align-items: start;
+  padding: 92px 0 40px;
 }
 
-.hero-avatar {
-  aspect-ratio: 1;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 4.2rem;
-  font-weight: 700;
-  color: var(--ink);
-  background: radial-gradient(circle at 32% 28%, #dff4ff, var(--ice) 52%, var(--ice-deep));
-  box-shadow: 0 0 70px var(--ice-glow), inset 0 -12px 30px rgba(11, 15, 20, 0.25);
-  animation: float 7s ease-in-out infinite;
+/* 右侧：不是一块图，是页面本身的空气。没有容器，没有边界 */
+.hero-sky {
+  width: 100%;
+  height: 380px;
+  position: relative;
+  margin-top: -30px;
+  pointer-events: none;
 }
 
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-12px); }
+/* 天空主体：向四周彻底化开，看不出从哪里开始、到哪里结束 */
+.hero-sky::before {
+  content: "";
+  position: absolute;
+  inset: -24% -26% -20% -18%;
+  background:
+    /* 底部近处的暖白雾 */
+    radial-gradient(
+      ellipse 76% 42% at 46% 88%,
+      rgba(255, 255, 255, 0.85),
+      rgba(255, 255, 255, 0.34) 52%,
+      transparent 78%
+    ),
+    /* 中景的蓝：天空的主色 */
+    radial-gradient(
+      ellipse 88% 58% at 58% 46%,
+      rgba(170, 210, 235, 0.62),
+      rgba(196, 224, 243, 0.42) 48%,
+      transparent 76%
+    ),
+    /* 左上：天顶的亮 */
+    radial-gradient(
+      ellipse 62% 46% at 30% 12%,
+      rgba(255, 255, 255, 0.92),
+      rgba(255, 255, 255, 0.38) 46%,
+      transparent 74%
+    ),
+    /* 右下：远处的一点深，增加纵深 */
+    radial-gradient(
+      ellipse 54% 40% at 88% 76%,
+      rgba(128, 178, 212, 0.34),
+      transparent 72%
+    );
+  filter: blur(2px);
 }
 
+/* 云：近处轮廓实、远处化掉，形状刻意不对称 */
+.hero-sky::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    /* 近处主云：大、亮、边缘实，形状偏一侧 */
+    radial-gradient(
+      ellipse 30% 16% at 28% 76%,
+      rgba(255, 255, 255, 1) 0%,
+      rgba(255, 255, 255, 0.78) 26%,
+      rgba(255, 255, 255, 0.34) 52%,
+      rgba(255, 255, 255, 0.08) 72%,
+      transparent 86%
+    ),
+    /* 近处主云的伴生小块：错位叠加，打破对称 */
+    radial-gradient(
+      ellipse 14% 10% at 50% 82%,
+      rgba(255, 255, 255, 0.88) 0%,
+      rgba(255, 255, 255, 0.4) 44%,
+      transparent 80%
+    ),
+    /* 近处右侧一朵：稍低、稍暗 */
+    radial-gradient(
+      ellipse 21% 12% at 80% 72%,
+      rgba(255, 255, 255, 0.78) 0%,
+      rgba(255, 255, 255, 0.32) 48%,
+      transparent 82%
+    ),
+    /* 中景：明显倾斜的细云，不再水平 */
+    radial-gradient(
+      ellipse 25% 3.6% at 56% 48%,
+      rgba(255, 255, 255, 0.42) 0%,
+      rgba(255, 255, 255, 0.14) 54%,
+      transparent 86%
+    ),
+    /* 中景第二朵：偏左、更细更淡 */
+    radial-gradient(
+      ellipse 16% 2.4% at 20% 58%,
+      rgba(255, 255, 255, 0.3) 0%,
+      transparent 84%
+    ),
+    /* 远处掠影：几乎化掉 */
+    radial-gradient(
+      ellipse 12% 1.4% at 42% 20%,
+      rgba(255, 255, 255, 0.26) 0%,
+      transparent 82%
+    ),
+    /* 一缕斜云：竖向分量，破掉全部水平 */
+    radial-gradient(
+      ellipse 15% 22% at 90% 36%,
+      rgba(255, 255, 255, 0.2) 0%,
+      transparent 86%
+    );
+  filter: blur(0.9px);
+}
+
+
+/* 辅助行：斜线分隔 */
 .tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 22px;
+  align-items: center;
+  gap: 0;
+  margin-top: 34px;
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
+  color: var(--ash);
 }
 
 .tag {
-  font-size: 0.82rem;
-  padding: 5px 13px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  color: var(--ice);
-  background: rgba(127, 216, 255, 0.06);
+  padding: 0 14px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--ash);
+  position: relative;
+}
+
+.tag + .tag::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 11px;
+  margin-top: -5.5px;
+  background: var(--seam);
+}
+
+.tag:first-child {
+  padding-left: 0;
 }
 
 /* ---------- 按钮 ---------- */
 .btns {
   display: flex;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin-top: 30px;
+  align-items: center;
+  margin-top: 40px;
 }
 
 .btn {
   display: inline-block;
-  padding: 11px 24px;
-  border-radius: 999px;
+  padding: 12px 26px;
+  border-radius: var(--radius);
   text-decoration: none;
-  font-size: 0.94rem;
-  letter-spacing: 0.04em;
+  font-size: 0.93rem;
+  letter-spacing: 0.02em;
   transition: all 0.25s ease;
   border: 1px solid transparent;
   cursor: pointer;
@@ -256,181 +479,293 @@ p {
 }
 
 .btn-primary {
-  background: var(--ice);
-  color: var(--ink);
+  background: var(--blue-deep);
+  color: var(--paper);
   font-weight: 600;
-  box-shadow: 0 0 24px var(--ice-glow);
 }
 
 .btn-primary:hover {
-  background: #a8e6ff;
-  transform: translateY(-2px);
+  background: var(--blue);
 }
 
 .btn-ghost {
-  border-color: var(--line);
-  color: var(--ice);
+  border-color: var(--seam);
+  color: var(--blue-deep);
+  background: none;
 }
 
 .btn-ghost:hover {
-  border-color: var(--ice);
-  background: rgba(127, 216, 255, 0.08);
+  border-color: var(--blue);
+  background: var(--blue-veil);
 }
 
 /* ---------- 故事 ---------- */
 .story {
-  border-left: 2px solid var(--line);
-  padding: 6px 0 6px 26px;
-  margin-bottom: 34px;
+  border-left: 1px solid var(--seam);
+  padding: 4px 0 4px 28px;
+  margin-bottom: 40px;
+  position: relative;
   transition: border-color 0.3s ease;
 }
 
-.story:hover {
-  border-color: var(--ice);
+.story::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 0;
+  width: 1px;
+  height: 0;
+  background: var(--blue);
+  transition: height 0.5s ease;
+}
+
+.story:hover::before {
+  height: 100%;
 }
 
 .story-meta {
-  font-size: 0.82rem;
-  color: var(--ice);
-  letter-spacing: 0.1em;
-  margin-bottom: 8px;
+  font-size: 0.78rem;
+  color: var(--blue);
+  letter-spacing: 0.2em;
+  margin-bottom: 10px;
+  font-family: var(--mono);
 }
 
-/* ---------- 动态时间线 ---------- */
+/* ---------- 时间线 ---------- */
 .timeline {
   position: relative;
-  padding-left: 30px;
+  padding-left: 32px;
 }
 
 .timeline::before {
   content: "";
   position: absolute;
-  left: 6px;
-  top: 8px;
-  bottom: 8px;
+  left: 3px;
+  top: 10px;
+  bottom: 10px;
   width: 1px;
   background: linear-gradient(
     to bottom,
     transparent,
-    var(--line) 12%,
-    var(--line) 88%,
+    var(--seam) 10%,
+    var(--seam) 90%,
     transparent
   );
 }
 
 .post {
   position: relative;
-  margin-bottom: 30px;
+  margin-bottom: 34px;
 }
 
 .post::before {
   content: "";
   position: absolute;
-  left: -30px;
-  top: 9px;
-  width: 9px;
-  height: 9px;
+  left: -32px;
+  top: 11px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--ink);
-  border: 2px solid var(--ice);
-  box-shadow: 0 0 12px var(--ice-glow);
+  background: var(--paper);
+  border: 1px solid var(--blue);
 }
 
 .post time {
-  font-size: 0.8rem;
-  color: var(--grey);
-  letter-spacing: 0.08em;
+  font-size: 0.76rem;
+  color: var(--ash);
+  letter-spacing: 0.14em;
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  font-family: var(--mono);
 }
 
 .post p {
   margin: 0;
 }
 
-/* ---------- 画廊 ---------- */
+/* ---------- 画廊：天空的样本 ---------- */
 .gallery {
   display: grid;
-  gap: 16px;
+  gap: 2px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .art {
   aspect-ratio: 4 / 3;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
+  border-radius: 0;
+  border: none;
   display: grid;
-  place-items: center;
-  text-align: center;
-  padding: 20px;
-  color: var(--grey);
-  font-size: 0.88rem;
-  letter-spacing: 0.06em;
+  place-items: end start;
+  text-align: left;
+  padding: 22px;
+  color: var(--ash);
+  font-size: 0.84rem;
+  letter-spacing: 0.04em;
   cursor: pointer;
   overflow: hidden;
   position: relative;
-  transition: transform 0.35s ease, box-shadow 0.35s ease;
+  transition: filter 0.4s ease;
 }
 
 .art span {
   position: relative;
   z-index: 1;
+  transition: color 0.3s ease;
 }
 
 .art:hover {
-  transform: scale(1.03);
-  box-shadow: 0 16px 46px rgba(127, 216, 255, 0.14);
+  filter: brightness(1.06) saturate(1.08);
 }
 
-.art-1 { background: linear-gradient(135deg, #dff4ff, #7fd8ff 60%, #2ea8e0); color: #0b0f14; }
-.art-2 { background: linear-gradient(135deg, #1a2029, #0f1620); }
-.art-3 { background: linear-gradient(140deg, #7fd8ff, #dff4ff 50%, #a8e6ff); color: #0b0f14; }
-.art-4 { background: linear-gradient(200deg, #0b0f14, #22303d); }
-.art-5 { background: linear-gradient(120deg, #2ea8e0, #0b0f14 75%); }
-.art-6 { background: linear-gradient(160deg, #f7fafc, #c9e8f7 70%, #7fd8ff); color: #0b0f14; }
+.art:hover span {
+  color: var(--ink);
+}
+
+/* 六个天空的时刻 */
+.art-1 { background: linear-gradient(to bottom, #7fb9dd, #b9dcf0 45%, #e6f2fa); }
+.art-2 { background: linear-gradient(to bottom, #3c6d92, #7fa8c4 55%, #c2d8e6); color: #eef4f9; }
+.art-3 { background: linear-gradient(160deg, #ffffff, #dbeaf5 50%, #a9d2ea); }
+.art-4 { background: linear-gradient(to bottom, #2b5570, #4a7a9c 55%, #8fb4cd); }
+.art-5 { background: linear-gradient(120deg, #f0b7c4, #d9c2e0 40%, #9fc0dc); }
+.art-6 { background: linear-gradient(to bottom, #1d4560, #3f6f92 60%, #7fa8c4); color: #eef4f9; }
+
+.art-2 span, .art-6 span {
+  color: #dcecf7;
+}
+.art-2:hover span, .art-6:hover span {
+  color: #ffffff;
+}
 
 /* ---------- 页脚 ---------- */
 footer {
   position: relative;
   z-index: 1;
-  border-top: 1px solid var(--line);
-  padding: 34px 24px;
-  text-align: center;
-  color: var(--grey);
-  font-size: 0.86rem;
+  border-top: 1px solid var(--seam-soft);
+  padding: 36px var(--gutter);
+  text-align: left;
+  color: var(--ash);
+  font-size: 0.84rem;
+  letter-spacing: 0.02em;
+}
+
+footer p {
+  max-width: var(--wrap);
+  margin: 0 auto;
 }
 
 footer .ice {
-  color: var(--ice);
+  color: var(--blue);
 }
 
 /* ---------- 响应式 ---------- */
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .hero {
     grid-template-columns: 1fr;
-    text-align: center;
+    gap: 34px;
+    padding-top: 64px;
   }
-  .hero-avatar {
-    max-width: 200px;
-    margin: 0 auto;
-  }
-  .tags, .btns {
-    justify-content: center;
-  }
-  nav {
-    gap: 16px;
-    row-gap: 8px;
-  }
-  .brand {
-    width: 100%;
+  .hero-sky {
+    height: 158px;
+    order: -1;
+    margin: -6px 0 2px;
   }
 }
 
-/* ---------- 入场动画 ---------- */
+@media (max-width: 760px) {
+  nav {
+    gap: 0;
+    padding: 14px var(--gutter);
+    flex-wrap: wrap;
+  }
+  .brand {
+    width: auto;
+    margin-right: auto;
+  }
+  .nav-toggle {
+    display: block;
+    margin-left: 0;
+  }
+  .nav-links {
+    display: none;
+    width: 100%;
+    flex: 1 0 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--seam-soft);
+  }
+  .nav-links.open {
+    display: flex;
+  }
+  .nav-links a {
+    padding: 12px 2px;
+    font-size: 0.98rem;
+  }
+  .nav-links a::after {
+    display: none;
+  }
+  section {
+    padding: 56px 0 16px;
+  }
+  .page-head {
+    padding-top: 58px;
+  }
+  .story {
+    padding-left: 20px;
+  }
+  .timeline {
+    padding-left: 26px;
+  }
+  .post::before {
+    left: -26px;
+  }
+  .card {
+    padding: 22px 0;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  :root {
+    --gutter: 18px;
+  }
+  .btn {
+    padding: 11px 20px;
+    font-size: 0.9rem;
+  }
+  .gallery {
+    grid-template-columns: 1fr;
+  }
+  .art {
+    aspect-ratio: 3 / 2;
+  }
+}
+
+/* 尊重减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .btn, .art, .story::before, .card::before, nav a::after {
+    transition: none;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* ---------- 入场：唯一一次编排过的动效 ---------- */
 .reveal {
   opacity: 0;
-  transform: translateY(22px);
-  transition: opacity 0.7s ease, transform 0.7s ease;
+  transform: translateY(18px);
+  transition: opacity 0.9s cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform 0.9s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .reveal.in {

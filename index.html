@@ -12,11 +12,14 @@
 <header>
   <nav>
     <span class="brand">SAT<i class="dot">O</i>RU<span class="dot">.</span></span>
-    <a data-nav href="index.html">首页</a>
-    <a data-nav href="about.html">自我介绍</a>
-    <a data-nav href="stories.html">写给她的故事</a>
-    <a data-nav href="daily.html">日常动态</a>
-    <a data-nav href="gallery.html">画廊</a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="展开导航菜单">菜单</button>
+    <div class="nav-links" id="nav-links">
+      <a data-nav href="index.html">首页</a>
+      <a data-nav href="about.html">自我介绍</a>
+      <a data-nav href="stories.html">写给她的故事</a>
+      <a data-nav href="daily.html">日常动态</a>
+      <a data-nav href="gallery.html">画廊</a>
+    </div>
   </nav>
 </header>
 
@@ -24,14 +27,13 @@
 
   <div class="hero">
     <div>
-      <h1>懒散一点，<br>但<span class="accent">认真</span>的东西从不含糊。</h1>
+      <h1><span class="accent">晴天的时候，</span><br><span class="dim">我能看见很远的地方。</span></h1>
       <p class="lede">
-        你好，我是五条。这里是我的自留地——放一点自我介绍，
-        一些写给她的故事，一些没什么用但很开心的日常。
-        风格如你所见：黑、白、冰蓝，干净，偶尔贫一句。
+        我是五条。这里是我的自留地——几段自我介绍，一些写给她的短句，
+        还有没什么用但每天都想记一笔的琐事。
       </p>
       <div class="tags">
-        <span class="tag">甜品爱好者</span>
+        <span class="tag">甜品店常客</span>
         <span class="tag">带学生</span>
         <span class="tag">出任务</span>
         <span class="tag">偶尔认真</span>
@@ -41,7 +43,7 @@
         <a class="btn btn-ghost" href="stories.html">读个故事</a>
       </div>
     </div>
-    <div class="hero-avatar">悟</div>
+    <div class="hero-sky" aria-hidden="true"></div>
   </div>
 
   <section class="reveal">
