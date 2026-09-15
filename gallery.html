@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>画廊 · 五条悟</title>
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/gallery.css">
 </head>
 <body>
 
@@ -24,30 +25,42 @@
 
 <main>
 
-  <div class="page-head reveal">
+  <div class="page-head">
     <h1>图<span class="accent">廊</span></h1>
     <p class="lede">
-      现在挂的全是纯 CSS 占位色块，不加载任何外部图片。
-      等你哪天愿意，再换成真的风景。
+      晴空、窗边，还有雨后回头的那一刻。
+      三张留给你的五条悟同人插画。
     </p>
   </div>
 
-  <section class="reveal">
-    <div class="gallery">
-      <div class="art art-1"><span>冰蓝的天空</span></div>
-      <div class="art art-2"><span>深夜的走廊</span></div>
-      <div class="art art-3"><span>甜品柜前</span></div>
-      <div class="art art-4"><span>收工的路</span></div>
-      <div class="art art-5"><span>雨天的窗</span></div>
-      <div class="art art-6"><span>留着的灯</span></div>
+  <section aria-label="五条悟插画作品">
+    <div class="portrait-gallery">
+      <figure class="portrait-card" id="sky">
+        <a href="assets/gallery/gojo-sky.webp" aria-label="查看大图：晴空见你">
+          <img src="assets/gallery/gojo-sky.webp" alt="晴空白云下，白发蓝眼的五条悟穿着黑色高领，正面微笑。" width="1086" height="1448" loading="lazy" decoding="async">
+        </a>
+        <figcaption>晴空见你</figcaption>
+      </figure>
+      <figure class="portrait-card" id="cafe">
+        <a href="assets/gallery/gojo-cafe.webp" aria-label="查看大图：窗边的约定">
+          <img src="assets/gallery/gojo-cafe.webp" alt="暖光咖啡馆窗边，五条悟托腮看向你，桌上放着草莓蛋糕。" width="1086" height="1448" loading="lazy" decoding="async">
+        </a>
+        <figcaption>窗边的约定</figcaption>
+      </figure>
+      <figure class="portrait-card" id="rain">
+        <a href="assets/gallery/gojo-rain.webp" aria-label="查看大图：雨后回眸">
+          <img src="assets/gallery/gojo-rain.webp" alt="雨后的东京街道映着蓝色暮光，五条悟回头看向你，远处亮着东京塔。" width="1086" height="1448" loading="lazy" decoding="async">
+        </a>
+        <figcaption>雨后回眸</figcaption>
+      </figure>
     </div>
-    <p class="muted" style="margin-top:22px">点一下色块试试，它会告诉你它是什么。</p>
+    <p class="muted gallery-note">点击作品查看完整大图，返回即可继续浏览。<br>AI 生成的同人插画 · 非官方作品</p>
   </section>
 
 </main>
 
 <footer>
-  <p>© <span id="year"></span> 五条 · 本地预览版 · 黑白与冰蓝</p>
+  <p>© <span id="year"></span> 五条 · 晴空与你</p>
 </footer>
 
 <script src="js/main.js"></script>

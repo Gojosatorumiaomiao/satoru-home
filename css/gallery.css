@@ -1,0 +1,15 @@
+/* Gallery-only rules keep shared navigation and reveal fixes independent. */
+.portrait-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+.portrait-card { margin: 0; min-width: 0; }
+.portrait-card a { display: block; border-radius: 12px; overflow: hidden; }
+.portrait-card a:focus-visible { outline: 3px solid var(--blue); outline-offset: 5px; }
+.portrait-card img { display: block; width: 100%; height: auto; }
+.portrait-card figcaption { margin-top: 14px; font-size: 1rem; color: var(--ink); }
+.gallery-note { margin-top: 28px; }
+@media (max-width: 760px) {
+  .portrait-gallery { grid-template-columns: 1fr; gap: 32px; }
+}
