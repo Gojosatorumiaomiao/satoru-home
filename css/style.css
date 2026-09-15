@@ -179,6 +179,11 @@ nav a.active::after {
   flex-wrap: wrap;
 }
 
+/* 折叠按钮默认隐藏；只有脚本跑起来时才在窄屏出现 */
+.nav-toggle {
+  display: none;
+}
+
 /* ---------- 布局 ---------- */
 main {
   position: relative;
@@ -681,11 +686,14 @@ footer .ice {
     width: auto;
     margin-right: auto;
   }
-  .nav-toggle {
+  /* 折叠菜单只在菜单事件确认绑定成功后才启用：.nav-ready 由 main.js
+     在 toggle/links 监听绑定完成之后添加。没有 .nav-ready 时（脚本被禁用、
+     加载失败、或绑定前抛异常），链接保持可见可用，不做任何折叠。 */
+  .nav-ready .nav-toggle {
     display: block;
     margin-left: 0;
   }
-  .nav-links {
+  .nav-ready .nav-links {
     display: none;
     width: 100%;
     flex: 1 0 100%;
@@ -696,8 +704,19 @@ footer .ice {
     padding-top: 12px;
     border-top: 1px solid var(--seam-soft);
   }
-  .nav-links.open {
+  .nav-ready .nav-links.open {
     display: flex;
+  }
+  /* 无 JS 时的降级排布：纵向、整行可点，不做折叠 */
+  .nav-links {
+    width: 100%;
+    flex: 1 0 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--seam-soft);
   }
   .nav-links a {
     padding: 12px 2px;
@@ -745,7 +764,28 @@ footer .ice {
   }
 }
 
-/* 尊重减少动效偏好 */
+/* ---------- 入场：渐进增强，不是可见性开关 ----------
+   基础规则让内容始终可见；只有当根元素带 .js（说明脚本真的跑起来了）
+   时，才把内容先藏起来做入场动画。脚本失败、被拦截、或环境不支持时，
+   正文照常可读。 */
+.reveal {
+  opacity: 1;
+  transform: none;
+}
+
+.js .reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.9s cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform 0.9s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.js .reveal.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* 尊重减少动效偏好：放在最后，确保覆盖上面的入场规则 */
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -753,22 +793,11 @@ footer .ice {
   .btn, .art, .story::before, .card::before, nav a::after {
     transition: none;
   }
-  .reveal {
+  /* 关键：减少动效时直接显示，不依赖 .in */
+  .reveal,
+  .js .reveal {
     opacity: 1;
     transform: none;
     transition: none;
   }
-}
-
-/* ---------- 入场：唯一一次编排过的动效 ---------- */
-.reveal {
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.9s cubic-bezier(0.22, 0.61, 0.36, 1),
-    transform 0.9s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-
-.reveal.in {
-  opacity: 1;
-  transform: none;
 }
