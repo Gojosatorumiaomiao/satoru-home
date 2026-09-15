@@ -179,6 +179,11 @@ nav a.active::after {
   flex-wrap: wrap;
 }
 
+/* 折叠按钮默认隐藏；只有脚本跑起来时才在窄屏出现 */
+.nav-toggle {
+  display: none;
+}
+
 /* ---------- 布局 ---------- */
 main {
   position: relative;
@@ -681,11 +686,13 @@ footer .ice {
     width: auto;
     margin-right: auto;
   }
-  .nav-toggle {
+  /* 折叠菜单只在脚本可用时启用：.js 由 main.js 在确认兜底就位后添加。
+     没有 .js 时，链接保持可见可用，不做任何折叠。 */
+  .js .nav-toggle {
     display: block;
     margin-left: 0;
   }
-  .nav-links {
+  .js .nav-links {
     display: none;
     width: 100%;
     flex: 1 0 100%;
@@ -696,8 +703,19 @@ footer .ice {
     padding-top: 12px;
     border-top: 1px solid var(--seam-soft);
   }
-  .nav-links.open {
+  .js .nav-links.open {
     display: flex;
+  }
+  /* 无 JS 时的降级排布：纵向、整行可点，不做折叠 */
+  .nav-links {
+    width: 100%;
+    flex: 1 0 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--seam-soft);
   }
   .nav-links a {
     padding: 12px 2px;
