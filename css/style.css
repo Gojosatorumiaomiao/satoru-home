@@ -686,13 +686,14 @@ footer .ice {
     width: auto;
     margin-right: auto;
   }
-  /* 折叠菜单只在脚本可用时启用：.js 由 main.js 在确认兜底就位后添加。
-     没有 .js 时，链接保持可见可用，不做任何折叠。 */
-  .js .nav-toggle {
+  /* 折叠菜单只在菜单事件确认绑定成功后才启用：.nav-ready 由 main.js
+     在 toggle/links 监听绑定完成之后添加。没有 .nav-ready 时（脚本被禁用、
+     加载失败、或绑定前抛异常），链接保持可见可用，不做任何折叠。 */
+  .nav-ready .nav-toggle {
     display: block;
     margin-left: 0;
   }
-  .js .nav-links {
+  .nav-ready .nav-links {
     display: none;
     width: 100%;
     flex: 1 0 100%;
@@ -703,7 +704,7 @@ footer .ice {
     padding-top: 12px;
     border-top: 1px solid var(--seam-soft);
   }
-  .js .nav-links.open {
+  .nav-ready .nav-links.open {
     display: flex;
   }
   /* 无 JS 时的降级排布：纵向、整行可点，不做折叠 */

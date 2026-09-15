@@ -61,23 +61,35 @@
   });
 
   // 移动端导航开关
+  // 折叠只在事件确实绑定成功后才启用：先绑监听，绑定成功之后才加 .nav-ready。
+  // 只要在绑定完成前抛异常，根元素就不会带 .nav-ready，链接保持默认可见可用。
   var toggle = document.querySelector(".nav-toggle");
   var links = document.getElementById("nav-links");
-  if (toggle && links) {
-    toggle.addEventListener("click", function () {
-      var open = links.classList.toggle("open");
-      toggle.setAttribute("aria-expanded", open ? "true" : "false");
-      toggle.setAttribute("aria-label", open ? "收起导航菜单" : "展开导航菜单");
-    });
+  try {
+    if (toggle && links) {
+      toggle.addEventListener("click", function () {
+        var open = links.classList.toggle("open");
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        toggle.setAttribute("aria-label", open ? "收起导航菜单" : "展开导航菜单");
+      });
 
-    // 跳转后自动收起，避免返回时菜单残留展开
-    links.addEventListener("click", function (e) {
-      if (e.target.closest("a") && links.classList.contains("open")) {
-        links.classList.remove("open");
-        toggle.setAttribute("aria-expanded", "false");
-        toggle.setAttribute("aria-label", "展开导航菜单");
-      }
-    });
+      // 跳转后自动收起，避免返回时菜单残留展开
+      links.addEventListener("click", function (e) {
+        if (e.target.closest("a") && links.classList.contains("open")) {
+          links.classList.remove("open");
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.setAttribute("aria-label", "展开导航菜单");
+        }
+      });
+
+      // 绑定成功，允许 CSS 折叠导航
+      document.documentElement.classList.add("nav-ready");
+    }
+  } catch (err) {
+    // 绑定失败：撤掉标记并复位，导航维持展开可点
+    document.documentElement.classList.remove("nav-ready");
+    if (links) links.classList.remove("open");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
   }
 
   // 画廊轻提示（不跳转、不请求外网）
