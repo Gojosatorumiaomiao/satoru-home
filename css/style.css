@@ -745,7 +745,28 @@ footer .ice {
   }
 }
 
-/* 尊重减少动效偏好 */
+/* ---------- 入场：渐进增强，不是可见性开关 ----------
+   基础规则让内容始终可见；只有当根元素带 .js（说明脚本真的跑起来了）
+   时，才把内容先藏起来做入场动画。脚本失败、被拦截、或环境不支持时，
+   正文照常可读。 */
+.reveal {
+  opacity: 1;
+  transform: none;
+}
+
+.js .reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.9s cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform 0.9s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.js .reveal.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* 尊重减少动效偏好：放在最后，确保覆盖上面的入场规则 */
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -753,22 +774,11 @@ footer .ice {
   .btn, .art, .story::before, .card::before, nav a::after {
     transition: none;
   }
-  .reveal {
+  /* 关键：减少动效时直接显示，不依赖 .in */
+  .reveal,
+  .js .reveal {
     opacity: 1;
     transform: none;
     transition: none;
   }
-}
-
-/* ---------- 入场：唯一一次编排过的动效 ---------- */
-.reveal {
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.9s cubic-bezier(0.22, 0.61, 0.36, 1),
-    transform 0.9s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-
-.reveal.in {
-  opacity: 1;
-  transform: none;
 }
