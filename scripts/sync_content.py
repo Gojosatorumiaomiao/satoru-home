@@ -158,12 +158,26 @@ def story_slug(date, title, index):
 
 
 def write_story_archive(date, title, paras, filename=None):
-    """写出单篇归档，保留原标题与完整正文。"""
+    """写出单篇归档，保留原标题与完整正文。
+
+    已存在的归档是**已公开原文**，任何情况下都不覆盖：
+      - 内容一致  -> "reused"，不重写文件
+      - 内容不同  -> "conflict"，保留已有原文，把差异交回调用方报告
+    返回 (path, status, archive_paras)；archive_paras 仅在冲突时给出旧文件段数。
+    """
     os.makedirs(OUT_STORIES, exist_ok=True)
     p = os.path.join(OUT_STORIES, filename or (date + ".md"))
     body = "\n\n".join(paras)
-    open(p, "w", encoding="utf-8").write("# %s %s\n\n%s\n" % (date, title, body))
-    return p
+    content = "# %s %s\n\n%s\n" % (date, title, body)
+    if os.path.exists(p):
+        old = open(p, encoding="utf-8").read()
+        if old == content:
+            return p, "reused", None
+        old_lines = old.strip().split("\n")
+        old_paras = [x for x in "\n".join(old_lines[1:]).split("\n\n") if x.strip()]
+        return p, "conflict", len(old_paras)
+    open(p, "w", encoding="utf-8").write(content)
+    return p, "written", None
 
 
 def render_story_list():
@@ -437,12 +451,22 @@ def main():
         else:
             for idx, (title, paras) in enumerate(stories):
                 fname = story_slug(date, title, idx)
-                archive = os.path.join(OUT_STORIES, fname)
-                existed = os.path.exists(archive)
-                write_story_archive(date, title, paras, fname)
-                report["steps"].append(
-                    ("复用已有归档" if existed else "写入归档")
-                    + "：stories/%s（《%s》%d 段）" % (fname, title, len(paras)))
+                _, status, old_paras = write_story_archive(date, title, paras, fname)
+                if status == "written":
+                    report["steps"].append(
+                        "写入归档：stories/%s（《%s》%d 段）" % (fname, title, len(paras)))
+                elif status == "reused":
+                    report["steps"].append(
+                        "复用已有归档（内容一致）：stories/%s（《%s》%d 段）"
+                        % (fname, title, len(paras)))
+                else:
+                    # 已公开原文优先：只报告差异，不改写已发布内容
+                    report["steps"].append(
+                        "保留已有归档，未覆盖：stories/%s（源文 %d 段 / 已归档 %d 段；"
+                        "《%s》）" % (fname, len(paras), old_paras or 0, title))
+                    report.setdefault("archive_conflicts", []).append(
+                        {"file": fname, "title": title,
+                         "source_paras": len(paras), "archive_paras": old_paras or 0})
             report["stories"] = [t for t, _ in stories]
 
             stories_html = os.path.join(SITE, "stories.html")
