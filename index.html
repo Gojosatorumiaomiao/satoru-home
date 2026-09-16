@@ -6,6 +6,7 @@
   <title>五条悟 · 主页</title>
   <meta name="description" content="一个清爽的自留地：自我介绍、写给她的故事、日常动态与画廊。">
   <link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/portrait.css">
 </head>
 <body>
 
@@ -43,7 +44,9 @@
         <a class="btn btn-ghost" href="stories.html">读个故事</a>
       </div>
     </div>
-    <div class="hero-sky" aria-hidden="true"></div>
+    <figure class="hero-portrait">
+<video id="satoru-video" muted loop playsinline preload="metadata" poster="assets/satoru-poster.jpg" aria-label="五条悟的动态肖像" controls><source src="assets/satoru-idle.mp4" type="video/mp4">你的浏览器暂不支持视频播放。</video>
+<figcaption><span>晴天，见到你。</span><button id="motion-toggle" type="button" hidden aria-controls="satoru-video">播放动画</button></figcaption></figure>
   </div>
 
   <section class="reveal">
@@ -95,5 +98,6 @@
 </footer>
 
 <script src="js/main.js"></script>
+<script src="js/portrait.js"></script>
 </body>
 </html>
