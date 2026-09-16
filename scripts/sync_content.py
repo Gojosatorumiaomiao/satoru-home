@@ -126,7 +126,10 @@ def render_story_list():
         title = re.sub(r"^#\s*\d{4}-\d{2}-\d{2}\s*", "", head).strip()
         body_lines = lines[1:]
         paras = [p.strip() for p in "\n".join(body_lines).split("\n\n") if p.strip()]
-        lead = paras[0][:88] + "…" if paras and len(paras[0]) > 88 else (paras[0] if paras else "")
+        # 首段整段显示在折叠之外；其余段落进入 details。
+        # 不能截断首段：截断后剩余段落从 paras[1] 开始，
+        # 首段被截去的尾部既不在摘要里也不在展开正文里，会静默丢字。
+        lead = paras[0] if paras else ""
         rest = paras[1:]
         more = ""
         if rest:

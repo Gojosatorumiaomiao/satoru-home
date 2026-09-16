@@ -1,0 +1,46 @@
+{
+ "url": "file:///tmp/satoru-preview/stories.html",
+ "viewport": [
+  375,
+  812
+ ],
+ "articles": 3,
+ "items": [
+  {
+   "id": "story-2026-01-03",
+   "title": "单段样例",
+   "lead": "整篇只有一段的长文本：没有第二段，所以页面不应该出现「继续读」，而这一段本身必须完整显示，同样不能因为超过八十八个字符就被截断或吞掉。",
+   "summary": null,
+   "rest": [],
+   "detailsOpen": null
+  },
+  {
+   "id": "story-2026-01-02",
+   "title": "短首段多段样例",
+   "lead": "很短的首段。",
+   "summary": "继续读",
+   "rest": [
+    "第二段，应当出现在展开正文里。",
+    "第三段，也应当出现在展开正文里。"
+   ],
+   "detailsOpen": true
+  },
+  {
+   "id": "story-2026-01-01",
+   "title": "长首段样例",
+   "lead": "首段故意写得超过八十八个字符，用来验证折叠之外的首段不会被截断，并且在展开之后整段都能读到，不会在中途少掉任何一句话。这里再补一句收尾，让首段明显长于旧实现里那个八十八字符的截断点。",
+   "summary": "继续读",
+   "rest": [
+    "第二段也要出现，用来确认段落顺序没有被打乱。",
+    "第三段：结束。"
+   ],
+   "detailsOpen": true
+  }
+ ],
+ "revealTotal": 2,
+ "revealHidden": 0,
+ "docScrollWidth": 375,
+ "docClientWidth": 375,
+ "horizontalOverflow": false
+}
+SHOT /tmp/shots/preview-375.png 244369 bytes
