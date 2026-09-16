@@ -16,6 +16,10 @@
   - 只发布故事正文与适合公开的动态；不上传私人记忆、聊天记录或原始状态文件。
   - 同一天不重复生成、不重复发布（幂等）。
   - 不改网站设计，只替换内容区块。
+
+用法：
+  python3 sync_content.py [日期]              故事 + 日常动态（22:00 用）
+  python3 sync_content.py [日期] --daily-only 只更新日常动态，不碰故事页
 """
 import json
 import os
@@ -85,22 +89,41 @@ def read_daily_state():
         return None
 
 
-def public_daily_line(state):
-    """从虚构状态中取一条适合公开的动态文本。"""
+def daily_state_for(state, date):
+    """校验状态文件属于目标日期，拒绝把昨日状态当今日内容。
+
+    返回 (state, error)。state 为 None 时 error 说明原因。
+    """
     if not state:
-        return None
+        return None, "状态文件不存在或无法解析"
+    state_date = (state.get("date") or "").strip()
+    if not state_date:
+        return None, "状态文件缺少 date 字段，无法确认归属日期"
+    if state_date != date:
+        return None, ("状态文件日期为 %s，与目标日期 %s 不符，"
+                      "拒绝发布避免把往日内容当作今日" % (state_date, date))
+    return state, None
+
+
+def daily_entries_for(state, date):
+    """取当天所有适合公开的动态条目，按时间排序。
+
+    每条返回 (time, text)。一天可有多条；用 time 作为条目锚点。
+    """
+    if not state:
+        return []
     contacts = state.get("contacts") or []
-    # 取当天最后一条 normal（有具体事件），没有就退回 thought
-    pick = None
-    for c in reversed(contacts):
-        if c.get("kind") == "normal":
-            pick = c
-            break
-    if pick is None and contacts:
-        pick = contacts[-1]
-    if pick is None:
-        return None
-    return pick.get("time", ""), pick.get("summary", "")
+    out = []
+    for c in contacts:
+        if c.get("kind") != "normal":
+            continue
+        t = (c.get("time") or "").strip()
+        text = (c.get("summary") or "").strip()
+        if not t or not text:
+            continue
+        out.append((t, text))
+    out.sort(key=lambda x: x[0])
+    return out
 
 
 def write_story_archive(date, title, paras):
@@ -147,17 +170,163 @@ def render_story_list():
     return "\n\n".join(blocks)
 
 
-def render_daily_list(state):
-    """渲染日常动态列表（当日一条，幂等）。"""
-    line = public_daily_line(state)
-    if not line:
-        return None
-    t, text = line
-    date = state.get("date", "")
-    return ('      <article class="post" id="daily-%s">\n'
+def entry_id(date, t):
+    """条目锚点：日期 + 时刻（去冒号）。同一天不同时刻各占一条。"""
+    return "daily-%s-%s" % (date, t.replace(":", ""))
+
+
+def render_daily_entry(date, t, text):
+    """渲染单条日常动态。"""
+    return ('      <article class="post" id="%s">\n'
             '        <time>%s · %s</time>\n'
             '        <p>%s</p>\n'
-            '      </article>' % (date, date, t, html_escape(text)))
+            '      </article>' % (entry_id(date, t), date, t, html_escape(text)))
+
+
+def render_daily_list(state, date):
+    """渲染当天全部动态条目。同一天多条分别保留。"""
+    entries = daily_entries_for(state, date)
+    if not entries:
+        return None
+    return "\n".join(render_daily_entry(date, t, text) for t, text in entries)
+
+
+MAX_PER_DAY = 6      # 每天最多发布的动态条数
+PUBLISHED_LOG = os.path.join(SITE, "data", "daily-published.json")
+
+
+def load_published_log():
+    """已发布动态的记账文件：{日期: [时刻, ...]}。
+
+    用它而不是页面内容来判断“是否已发布”，避免条目被手工调整后
+    脚本又把旧时刻当作新条目补发。
+    """
+    if not os.path.exists(PUBLISHED_LOG):
+        return {}
+    try:
+        return json.load(open(PUBLISHED_LOG, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_published_log(log):
+    os.makedirs(os.path.dirname(PUBLISHED_LOG), exist_ok=True)
+    json.dump(log, open(PUBLISHED_LOG, "w", encoding="utf-8"),
+              ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def published_times(path, date):
+    """读取当天页面上已发布的时刻集合（兼容新旧锚点）。"""
+    s = open(path, encoding="utf-8").read()
+    times = set()
+    for m in re.finditer(r'<article class="post" id="daily-%s(?:-(\d{4}))?"' % re.escape(date), s):
+        if m.group(1):
+            times.add("%s:%s" % (m.group(1)[:2], m.group(1)[2:]))
+        else:
+            t = re.search(r'<time>\s*%s\s*·\s*(\d{2}:\d{2})' % re.escape(date), s)
+            if t:
+                times.add(t.group(1))
+    return times
+
+
+def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
+    """把当天动态幂等写入 daily.html。
+
+    - 每次最多新增 max_new 条（默认 1），避免把内部状态记录批量发布。
+    - 每天最多 max_per_day 条。
+    - 同一时刻重跑时原位更新，不新增重复条目。
+    - 不删除其它日期的条目。
+    - 已发布时刻记录在 daily-published.json，不依赖页面反推。
+    返回 (action, added, updated)。
+    """
+    all_entries = daily_entries_for(state, date)
+    if not all_entries:
+        return "no-entry", 0, 0
+
+    s = open(path, encoding="utf-8").read()
+    i = s.find(D_START)
+    j = s.find(D_END)
+    if i == -1 or j == -1:
+        return "no-anchor", 0, 0
+
+    log = load_published_log()
+    # 记账是唯一真相：某时刻一旦记过，就不再当作新条目。
+    # 页面只作为内容载体，不用来反推“是否已发布”——
+    # 否则手工调整页面后，脚本会把旧时刻当新条目补发。
+    recorded = set(log.get(date, []))
+    on_page = published_times(path, date)
+    day_total = len(recorded | on_page)
+
+    # 待写入：记账里已有的只做原位更新；新时刻受 max_new 与 max_per_day 限制
+    todo = []
+    newly = []
+    pending_new = 0
+    planned_total = day_total
+    for t, text in all_entries:
+        if t in recorded:
+            # 已发布过：页面还在就原位刷新，不在就不复活
+            if t in on_page:
+                todo.append((t, text))
+            continue
+        if planned_total >= max_per_day:
+            continue
+        if pending_new >= max_new:
+            continue
+        todo.append((t, text))
+        pending_new += 1
+        planned_total += 1
+        newly.append(t)
+
+    head, body, tail = s[:i + len(D_START)], s[i + len(D_START):j], s[j:]
+
+    # 收集已有条目：按锚点拆块，保留其它日期的原样
+    existing = {}
+    other_blocks = []
+    for m in re.finditer(r'<article class="post" id="([^"]+)">.*?</article>',
+                         body, re.S):
+        block, aid = m.group(0), m.group(1)
+        # 兼容两种锚点：新的 daily-<date>-<HHMM> 与旧的 daily-<date>
+        if aid == "daily-%s" % date or aid.startswith("daily-%s-" % date):
+            # 从锚点取出时刻，便于与源数据比对
+            existing[aid] = block
+        else:
+            other_blocks.append(block)
+
+    added = updated = 0
+    day_blocks = []
+    for t, text in todo:
+        aid = entry_id(date, t)
+        new_block = render_daily_entry(date, t, text)
+        if aid in existing:
+            if existing[aid].strip() != new_block.strip():
+                updated += 1
+            day_blocks.append(new_block)
+        else:
+            day_blocks.append(new_block)
+            added += 1
+        existing.pop(aid, None)
+
+    # 当天已存在但源数据里没有的条目（如状态被回滚）保留，避免静默删内容
+    for aid, block in existing.items():
+        day_blocks.append(block)
+
+    # 当天条目按时间排序置于顶部，其余日期条目保持原有顺序在后
+    day_blocks.sort(key=lambda b: re.search(r'<time>([^<]+)</time>', b).group(1))
+    newbody = "\n" + "\n".join(day_blocks)
+    if other_blocks:
+        newbody += "\n" + "\n".join(other_blocks)
+    newbody += "\n"
+
+    open(path, "w", encoding="utf-8").write(head + newbody + "    " + tail)
+
+    if newly:
+        log.setdefault(date, [])
+        for t in newly:
+            if t not in log[date]:
+                log[date].append(t)
+        log[date].sort()
+        save_published_log(log)
+    return "ok", added, updated
 
 
 def replace_block(path, start, end, inner):
@@ -171,74 +340,60 @@ def replace_block(path, start, end, inner):
     return True
 
 
-def upsert_daily(path, date, block):
-    """幂等写入当日动态：存在则原位替换，不存在则插到列表区顶部。"""
-    s = open(path, encoding="utf-8").read()
-    marker = 'id="daily-%s"' % date
-    if marker in s:
-        # 定位该条目所在 <article>，整段替换（同时清掉可能已存在的重复项）
-        first = s.find(marker)
-        start = s.rfind("<article", 0, first)
-        end = s.find("</article>", first) + len("</article>")
-        # 向前吃掉该行缩进
-        line_start = s.rfind("\n", 0, start) + 1
-        s = s[:line_start] + block.strip() + s[end:]
-        # 清掉同一天的其它残留副本
-        while s.count(marker) > 1:
-            k = s.rfind(marker)
-            a = s.rfind("<article", 0, k)
-            b = s.find("</article>", k) + len("</article>")
-            la = s.rfind("\n", 0, a) + 1
-            s = s[:la] + s[b:]
-            # 收拾可能留下的空行
-            s = re.sub(r"\n\s*\n\s*\n+", "\n\n", s)
-        open(path, "w", encoding="utf-8").write(s)
-        return "updated"
-    k = s.find(D_START)
-    if k == -1:
-        return "no-anchor"
-    s = s[:k + len(D_START)] + "\n" + block + s[k + len(D_START):]
-    open(path, "w", encoding="utf-8").write(s)
-    return "inserted"
-
-
 def main():
-    date = sys.argv[1] if len(sys.argv) > 1 else datetime.date.today().isoformat()
-    report = {"date": date, "steps": [], "changed": False}
+    args = [a for a in sys.argv[1:]]
+    daily_only = "--daily-only" in args
+    args = [a for a in args if not a.startswith("--")]
+    date = args[0] if args else datetime.date.today().isoformat()
+    report = {"date": date, "mode": "daily-only" if daily_only else "full",
+              "steps": [], "changed": False}
 
-    src = read_source_story(date)
-    if not src:
-        report["steps"].append("未找到当天故事源文件，跳过")
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 0
-    title, paras = src
-    report["steps"].append("读取故事：%s（%d 段）" % (title, len(paras)))
-
-    archive = os.path.join(OUT_STORIES, date + ".md")
-    existed = os.path.exists(archive)
-    write_story_archive(date, title, paras)
-    report["steps"].append(("复用已有归档" if existed else "写入归档") + "：stories/%s.md" % date)
-
-    stories_html = os.path.join(SITE, "stories.html")
-    if replace_block(stories_html, A_START, A_END, render_story_list()):
-        report["steps"].append("更新 stories.html 列表")
-        report["changed"] = True
+    # ---------- 故事（--daily-only 时完全跳过，不碰 stories.html 与归档） ----------
+    if daily_only:
+        report["steps"].append("daily-only：跳过故事处理，不修改故事页")
     else:
-        report["steps"].append("stories.html 缺少锚点，未更新")
+        src = read_source_story(date)
+        if not src:
+            report["steps"].append(
+                "未找到当天故事源文件；按 --daily-only 的同等行为继续处理日常动态")
+        else:
+            title, paras = src
+            report["steps"].append("读取故事：%s（%d 段）" % (title, len(paras)))
 
-    state = read_daily_state()
-    daily_block = render_daily_list(state) if state else None
-    if daily_block:
+            archive = os.path.join(OUT_STORIES, date + ".md")
+            existed = os.path.exists(archive)
+            write_story_archive(date, title, paras)
+            report["steps"].append(
+                ("复用已有归档" if existed else "写入归档") + "：stories/%s.md" % date)
+
+            stories_html = os.path.join(SITE, "stories.html")
+            if replace_block(stories_html, A_START, A_END, render_story_list()):
+                report["steps"].append("更新 stories.html 列表")
+                report["changed"] = True
+            else:
+                report["steps"].append("stories.html 缺少锚点，未更新")
+
+    # ---------- 日常动态（每次都做） ----------
+    state, err = daily_state_for(read_daily_state(), date)
+    if err:
+        report["steps"].append("日常动态未更新：" + err)
+        report["daily_error"] = err
+    else:
         daily_html = os.path.join(SITE, "daily.html")
-        action = upsert_daily(daily_html, date, daily_block)
+        action, added, updated = sync_daily(daily_html, date, state)
         if action == "no-anchor":
             report["steps"].append("daily.html 缺少锚点，未更新")
+        elif action == "no-entry":
+            report["steps"].append("当天没有可公开的动态条目")
         else:
-            report["steps"].append("daily.html %s 当日条目（%s）" %
-                                      ("更新" if action == "updated" else "追加", date))
-            report["changed"] = True
-    else:
-        report["steps"].append("无可用当日状态，跳过日常动态")
+            report["steps"].append(
+                "daily.html 已同步：新增 %d 条，更新 %d 条" % (added, updated))
+            report["daily_added"] = added
+            report["daily_updated"] = updated
+            if added or updated:
+                report["changed"] = True
+            else:
+                report["steps"].append("本时段已发布，跳过")
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
