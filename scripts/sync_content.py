@@ -39,31 +39,57 @@ A_END = "<!-- stories:list:end -->"
 D_START = "<!-- daily:list:start -->"
 D_END = "<!-- daily:list:end -->"
 
+# 归档文件名：<date>.md / <date>-2.md / <date>-3.md（一天可有多篇）
+ARCHIVE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-(\d+))?\.md$")
+
 
 def html_escape(t):
     return (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def read_source_story(date):
-    """读取当天故事原文。返回 (title, body_paragraphs) 或 None。"""
+def strip_date_prefix(title):
+    """"# 2026-09-15 三分钟的空白" -> "三分钟的空白"；不含日期则原样返回。"""
+    m = re.match(r"^\d{4}-\d{2}-\d{2}\s+(.*)$", title)
+    return m.group(1).strip() if m else title
+
+
+def read_source_stories(date):
+    """读取当天源文件中的全部故事。返回 [(title, paragraphs), ...]。
+
+    一个日期文件可能含多篇（如 2026-09-12.md 有三篇），
+    每篇以一行 "# 标题" 开头。不能只取第一篇。
+    """
     p = os.path.join(SRC_STORIES, date + ".md")
     if not os.path.exists(p):
-        return None
+        return []
     raw = open(p, encoding="utf-8").read().strip()
-    lines = raw.split("\n")
-    title = ""
-    body_lines = []
-    for ln in lines:
-        if ln.startswith("# ") and not title:
-            # "# 2026-09-15 三分钟的空白" -> "三分钟的空白"
-            title = ln[2:].strip()
-            m = re.match(r"^\d{4}-\d{2}-\d{2}\s+(.*)$", title)
-            if m:
-                title = m.group(1).strip()
-        else:
-            body_lines.append(ln)
-    paras = [p.strip() for p in "\n".join(body_lines).split("\n\n") if p.strip()]
-    return title, paras
+
+    chunks = []
+    cur_title = None
+    cur_lines = []
+    for ln in raw.split("\n"):
+        if ln.startswith("# "):
+            if cur_title is not None:
+                chunks.append((cur_title, cur_lines))
+            cur_title = strip_date_prefix(ln[2:].strip())
+            cur_lines = []
+        elif cur_title is not None:
+            cur_lines.append(ln)
+    if cur_title is not None:
+        chunks.append((cur_title, cur_lines))
+
+    out = []
+    for title, lines in chunks:
+        paras = [x.strip() for x in "\n".join(lines).split("\n\n") if x.strip()]
+        if paras:
+            out.append((title, paras))
+    return out
+
+
+def read_source_story(date):
+    """兼容旧调用：返回当天第一篇 (title, paragraphs) 或 None。"""
+    stories = read_source_stories(date)
+    return stories[0] if stories else None
 
 
 def read_index():
@@ -126,32 +152,45 @@ def daily_entries_for(state, date):
     return out
 
 
-def write_story_archive(date, title, paras):
+def story_slug(date, title, index):
+    """归档文件名：当天一篇用 <date>.md，多篇用 <date>-<n>.md。"""
+    return "%s.md" % date if index == 0 else "%s-%d.md" % (date, index + 1)
+
+
+def write_story_archive(date, title, paras, filename=None):
+    """写出单篇归档，保留原标题与完整正文。"""
     os.makedirs(OUT_STORIES, exist_ok=True)
-    p = os.path.join(OUT_STORIES, date + ".md")
+    p = os.path.join(OUT_STORIES, filename or (date + ".md"))
     body = "\n\n".join(paras)
     open(p, "w", encoding="utf-8").write("# %s %s\n\n%s\n" % (date, title, body))
     return p
 
 
 def render_story_list():
-    """扫描 stories/ 下全部归档，按日期倒序渲染列表。"""
+    """扫描 stories/ 下全部归档，按日期（同日按序号）倒序渲染。
+
+    文件名约定：一天一篇用 <date>.md，多篇用 <date>-2.md、<date>-3.md。
+    首段整段显示在折叠之外，其余段落进入 details；
+    折叠之外 + 展开区 = 原文全段，不漏字、不重字。
+    """
     if not os.path.isdir(OUT_STORIES):
         return ""
-    files = sorted([f for f in os.listdir(OUT_STORIES)
-                    if re.match(r"^\d{4}-\d{2}-\d{2}\.md$", f)], reverse=True)
+
+    items = []
+    for f in os.listdir(OUT_STORIES):
+        m = ARCHIVE_RE.match(f)
+        if m:
+            items.append((m.group(1), int(m.group(2) or 1), f))
+    # 日期倒序；同日按序号倒序
+    items.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
     blocks = []
-    for f in files:
-        date = f[:-3]
+    for date, seq, f in items:
         raw = open(os.path.join(OUT_STORIES, f), encoding="utf-8").read().strip()
         lines = raw.split("\n")
         head = lines[0] if lines else ""
-        title = re.sub(r"^#\s*\d{4}-\d{2}-\d{2}\s*", "", head).strip()
-        body_lines = lines[1:]
-        paras = [p.strip() for p in "\n".join(body_lines).split("\n\n") if p.strip()]
-        # 首段整段显示在折叠之外；其余段落进入 details。
-        # 不能截断首段：截断后剩余段落从 paras[1] 开始，
-        # 首段被截去的尾部既不在摘要里也不在展开正文里，会静默丢字。
+        title = strip_date_prefix(re.sub(r"^#\s*", "", head).strip())
+        paras = [p.strip() for p in "\n".join(lines[1:]).split("\n\n") if p.strip()]
         lead = paras[0] if paras else ""
         rest = paras[1:]
         more = ""
@@ -164,8 +203,8 @@ def render_story_list():
             '        <div class="story-meta">%s</div>\n'
             '        <h3>%s</h3>\n'
             '        <p>%s</p>%s\n'
-            '        <p class="muted"><a class="story-link" href="stories/%s.md">全文</a></p>\n'
-            '      </article>' % (date, date, html_escape(title), html_escape(lead), more, date)
+            '        <p class="muted"><a class="story-link" href="stories/%s">全文</a></p>\n'
+            '      </article>' % (f[:-3], date, html_escape(title), html_escape(lead), more, f)
         )
     return "\n\n".join(blocks)
 
