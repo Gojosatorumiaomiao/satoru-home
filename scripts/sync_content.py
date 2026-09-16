@@ -379,6 +379,45 @@ def replace_block(path, start, end, inner):
     return True
 
 
+L_START = "<!-- latest-story:start -->"
+L_END = "<!-- latest-story:end -->"
+
+
+def render_latest_story():
+    """首页最新故事入口：取归档中最新一篇，给标题、日期和阅读入口。
+
+    只引用已有归档，不复制正文，避免首页与归档不一致。
+    """
+    if not os.path.isdir(OUT_STORIES):
+        return ""
+    items = []
+    for f in os.listdir(OUT_STORIES):
+        m = ARCHIVE_RE.match(f)
+        if m:
+            items.append((m.group(1), int(m.group(2) or 1), f))
+    if not items:
+        return ""
+    items.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    date, seq, f = items[0]
+
+    raw = open(os.path.join(OUT_STORIES, f), encoding="utf-8").read().strip()
+    lines = raw.split("\n")
+    title = strip_date_prefix(re.sub(r"^#\s*", "", lines[0] if lines else "").strip())
+    paras = [p.strip() for p in "\n".join(lines[1:]).split("\n\n") if p.strip()]
+    lead = paras[0] if paras else ""
+
+    return (
+        '    <article class="story" id="latest-story">\n'
+        '      <div class="story-meta">%s</div>\n'
+        '      <h3>%s</h3>\n'
+        '      <p>%s</p>\n'
+        '      <p class="muted">'
+        '<a class="story-link" href="stories.html#story-%s">在故事页读全文</a>'
+        '</p>\n'
+        '    </article>' % (date, html_escape(title), html_escape(lead), f[:-3])
+    )
+
+
 def main():
     args = [a for a in sys.argv[1:]]
     daily_only = "--daily-only" in args
@@ -391,19 +430,20 @@ def main():
     if daily_only:
         report["steps"].append("daily-only：跳过故事处理，不修改故事页")
     else:
-        src = read_source_story(date)
-        if not src:
-            report["steps"].append(
-                "未找到当天故事源文件；按 --daily-only 的同等行为继续处理日常动态")
+        # 支持一天多篇：把源文件里的每一篇都归档，一篇都不能丢
+        stories = read_source_stories(date)
+        if not stories:
+            report["steps"].append("未找到当天故事源文件；继续处理日常动态")
         else:
-            title, paras = src
-            report["steps"].append("读取故事：%s（%d 段）" % (title, len(paras)))
-
-            archive = os.path.join(OUT_STORIES, date + ".md")
-            existed = os.path.exists(archive)
-            write_story_archive(date, title, paras)
-            report["steps"].append(
-                ("复用已有归档" if existed else "写入归档") + "：stories/%s.md" % date)
+            for idx, (title, paras) in enumerate(stories):
+                fname = story_slug(date, title, idx)
+                archive = os.path.join(OUT_STORIES, fname)
+                existed = os.path.exists(archive)
+                write_story_archive(date, title, paras, fname)
+                report["steps"].append(
+                    ("复用已有归档" if existed else "写入归档")
+                    + "：stories/%s（《%s》%d 段）" % (fname, title, len(paras)))
+            report["stories"] = [t for t, _ in stories]
 
             stories_html = os.path.join(SITE, "stories.html")
             if replace_block(stories_html, A_START, A_END, render_story_list()):
@@ -411,6 +451,14 @@ def main():
                 report["changed"] = True
             else:
                 report["steps"].append("stories.html 缺少锚点，未更新")
+
+        # 首页最新故事入口（引用归档，不复制正文）
+        index_html = os.path.join(SITE, "index.html")
+        if replace_block(index_html, L_START, L_END, render_latest_story()):
+            report["steps"].append("更新 index.html 最新故事入口")
+            report["changed"] = True
+        else:
+            report["steps"].append("index.html 缺少最新故事锚点，未更新")
 
     # ---------- 日常动态（每次都做） ----------
     state, err = daily_state_for(read_daily_state(), date)
