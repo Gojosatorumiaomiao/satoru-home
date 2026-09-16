@@ -7,8 +7,9 @@
 
 在临时工作区里跑一遍 sync_content.main()，验证：
   1. 长首段故事归档后，stories.html 的首段完整、展开段齐全（Issue #3 P1）；
-  2. daily.html 正常追加当日一条；
-  3. 重复运行不产生重复条目（幂等）。
+  2. daily.html 正常追加当日一条（兼容新旧条目锚点）；
+  3. 重复运行不产生重复条目（幂等）；
+  4. 全程不写仓库真实文件：stories/html 与发布记账都指向临时目录。
 
 第一次运行输出 OK，用修复前的 sync_content.py 运行时「首段完整」「全文可拼回」会 FAIL。
 """
@@ -37,6 +38,9 @@ sc.SITE = TMP + "/site"
 sc.SRC_STORIES = TMP + "/stories"
 sc.DAILY_JSON = TMP + "/data/satoru-daily.json"
 sc.OUT_STORIES = sc.SITE + "/stories"
+# 发布记账必须指向临时目录：它决定“某时刻是否已发布”，
+# 不改写就会把虚构日期写进仓库真实的 data/daily-published.json。
+sc.PUBLISHED_LOG = TMP + "/data/daily-published.json"
 
 DATE = "2099-01-01"
 lead = ("虚构首段：这一段刻意超过八十八个字符，用来确认端到端跑一遍同步脚本之后，"
@@ -58,13 +62,20 @@ block = re.search(r"<article class=\"story\".*?</article>", html, re.S).group(0)
 got_lead = re.search(r"</h3>\s*<p>(.*?)</p>", block, re.S).group(1)
 got_rest = re.findall(r"<p>(.*?)</p>",
                       re.search(r"<details>.*?</details>", block, re.S).group(0), re.S)
-daily = open(os.path.join(sc.SITE, "daily.html"), encoding="utf-8").read()
-daily_before = daily.count('id="daily-%s"' % DATE)
+
+
+def daily_count(path, date):
+    """页面当天动态条数（兼容 daily-<date> 与 daily-<date>-<HHMM> 两种锚点）。"""
+    return len(re.findall(r'<article class="post" id="daily-%s(?:-\d{4})?"' % re.escape(date),
+                          open(path, encoding="utf-8").read()))
+
+
+daily_path = os.path.join(sc.SITE, "daily.html")
+daily_before = daily_count(daily_path, DATE)
 
 sys.argv = ["sync_content.py", DATE]
 sc.main()
-daily = open(os.path.join(sc.SITE, "daily.html"), encoding="utf-8").read()
-daily_after = daily.count('id="daily-%s"' % DATE)
+daily_after = daily_count(daily_path, DATE)
 
 checks = [
     ("首段完整（%d 字符）" % len(got_lead), got_lead == lead),
