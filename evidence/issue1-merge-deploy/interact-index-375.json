@@ -1,0 +1,142 @@
+[
+  {
+    "step": "1 baseline 375x812",
+    "state": {
+      "navAriaExpanded": "false",
+      "navToggleDisplay": "block",
+      "navVisibleLinks": 0,
+      "navTotalLinks": 5,
+      "navLinksDisplay": "none",
+      "videoPaused": false,
+      "videoControls": false,
+      "videoReadyState": 4,
+      "videoPoster": "assets/satoru-poster.jpg",
+      "buttonHidden": false,
+      "buttonText": "暂停动画",
+      "buttonInViewport": false,
+      "docClientWidth": 375,
+      "docScrollWidth": 375
+    },
+    "screenshot": "interact-1-baseline-375.png"
+  },
+  {
+    "step": "2 nav expand (real mouse click)",
+    "state": {
+      "navAriaExpanded": "true",
+      "navToggleDisplay": "block",
+      "navVisibleLinks": 5,
+      "navTotalLinks": 5,
+      "navLinksDisplay": "flex",
+      "videoPaused": false,
+      "videoControls": false,
+      "videoReadyState": 4,
+      "videoPoster": "assets/satoru-poster.jpg",
+      "buttonHidden": false,
+      "buttonText": "暂停动画",
+      "buttonInViewport": false,
+      "docClientWidth": 375,
+      "docScrollWidth": 375
+    },
+    "screenshot": "interact-2-nav-open-375.png"
+  },
+  {
+    "step": "3 nav collapse",
+    "state": {
+      "navAriaExpanded": "false",
+      "navToggleDisplay": "block",
+      "navVisibleLinks": 0,
+      "navTotalLinks": 5,
+      "navLinksDisplay": "none",
+      "videoPaused": false,
+      "videoControls": false,
+      "videoReadyState": 4,
+      "videoPoster": "assets/satoru-poster.jpg",
+      "buttonHidden": false,
+      "buttonText": "暂停动画",
+      "buttonInViewport": false,
+      "docClientWidth": 375,
+      "docScrollWidth": 375
+    },
+    "screenshot": null
+  },
+  {
+    "step": "4 motion toggle: pause (real mouse click)",
+    "state": {
+      "navAriaExpanded": "false",
+      "navToggleDisplay": "block",
+      "navVisibleLinks": 0,
+      "navTotalLinks": 5,
+      "navLinksDisplay": "none",
+      "videoPaused": true,
+      "videoControls": false,
+      "videoReadyState": 4,
+      "videoPoster": "assets/satoru-poster.jpg",
+      "buttonHidden": false,
+      "buttonText": "播放动画",
+      "buttonInViewport": true,
+      "docClientWidth": 375,
+      "docScrollWidth": 375
+    },
+    "screenshot": "interact-4-paused-375.png"
+  },
+  {
+    "step": "5 motion toggle: play again",
+    "state": {
+      "navAriaExpanded": "false",
+      "navToggleDisplay": "block",
+      "navVisibleLinks": 0,
+      "navTotalLinks": 5,
+      "navLinksDisplay": "none",
+      "videoPaused": false,
+      "videoControls": false,
+      "videoReadyState": 4,
+      "videoPoster": "assets/satoru-poster.jpg",
+      "buttonHidden": false,
+      "buttonText": "暂停动画",
+      "buttonInViewport": true,
+      "docClientWidth": 375,
+      "docScrollWidth": 375
+    },
+    "screenshot": null
+  },
+  {
+    "step": "6 compat: prefers-reduced-motion=reduce on fresh load",
+    "state": {
+      "navAriaExpanded": "false",
+      "navToggleDisplay": "block",
+      "navVisibleLinks": 0,
+      "navTotalLinks": 5,
+      "navLinksDisplay": "none",
+      "videoPaused": true,
+      "videoControls": false,
+      "videoReadyState": 4,
+      "videoPoster": "assets/satoru-poster.jpg",
+      "buttonHidden": false,
+      "buttonText": "播放动画",
+      "buttonInViewport": false,
+      "docClientWidth": 375,
+      "docScrollWidth": 375
+    },
+    "screenshot": "interact-6-reduced-motion-375.png"
+  },
+  {
+    "step": "7 compat: JavaScript disabled on fresh load",
+    "state": {
+      "navAriaExpanded": "false",
+      "navToggleDisplay": "none",
+      "navVisibleLinks": 5,
+      "navTotalLinks": 5,
+      "navLinksDisplay": "flex",
+      "videoPaused": true,
+      "videoControls": true,
+      "videoReadyState": 4,
+      "videoPoster": "assets/satoru-poster.jpg",
+      "buttonHidden": true,
+      "buttonText": "播放动画",
+      "buttonInViewport": true,
+      "docClientWidth": 375,
+      "docScrollWidth": 375
+    },
+    "screenshot": "interact-7-nojs-375.png"
+  }
+]
