@@ -299,17 +299,20 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     - 同一时刻重跑时原位更新，不新增重复条目。
     - 不删除其它日期的条目。
     - 已发布时刻记录在 daily-published.json，不依赖页面反推。
-    返回 (action, added, updated)。
+    返回 (action, added, updated, unscreened)。
+
+    所有返回路径都必须给出四项，否则调用方在生成报告前就会解包失败：
+    早退（no-entry / no-anchor）用空列表占位第四项。
     """
     all_entries = daily_entries_for(state, date)
     if not all_entries:
-        return "no-entry", 0, 0
+        return "no-entry", 0, 0, []
 
     s = open(path, encoding="utf-8").read()
     i = s.find(D_START)
     j = s.find(D_END)
     if i == -1 or j == -1:
-        return "no-anchor", 0, 0
+        return "no-anchor", 0, 0, []
 
     log = load_published_log()
     # 记账是唯一真相：某时刻一旦记过，就不再当作新条目。
