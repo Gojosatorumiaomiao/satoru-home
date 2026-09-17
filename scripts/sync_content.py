@@ -134,7 +134,11 @@ def daily_state_for(state, date):
 def daily_entries_for(state, date):
     """取当天所有适合公开的动态条目，按时间排序。
 
-    每条返回 (time, text)。一天可有多条；用 time 作为条目锚点。
+    每条返回 (time, text, screened)。一天可有多条；用 time 作为条目锚点。
+
+    screened 表示该条是否来自明确标记为"可公开"的来源：
+    优先取 contact["public_text"]；没有则退回 contact["summary"]，
+    此时 screened=False —— 行为不变，但调用方应把它计入未筛选数量并报警。
     """
     if not state:
         return []
@@ -144,10 +148,14 @@ def daily_entries_for(state, date):
         if c.get("kind") != "normal":
             continue
         t = (c.get("time") or "").strip()
-        text = (c.get("summary") or "").strip()
+        public = (c.get("public_text") or "").strip()
+        if public:
+            text, screened = public, True
+        else:
+            text, screened = (c.get("summary") or "").strip(), False
         if not t or not text:
             continue
-        out.append((t, text))
+        out.append((t, text, screened))
     out.sort(key=lambda x: x[0])
     return out
 
@@ -241,7 +249,8 @@ def render_daily_list(state, date):
     entries = daily_entries_for(state, date)
     if not entries:
         return None
-    return "\n".join(render_daily_entry(date, t, text) for t, text in entries)
+    return "\n".join(render_daily_entry(date, t, text)
+                     for t, text, _screened in entries)
 
 
 MAX_PER_DAY = 6      # 每天最多发布的动态条数
@@ -310,12 +319,16 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     on_page = published_times(path, date)
     day_total = len(recorded | on_page)
 
+    # C 方案：行为不变，但统计有多少条来自未筛选的内部摘要，
+    # 由调用方在报告里计数并报警，不静默当作已授权公开文案。
+    unscreened = [t for t, _text, screened in all_entries if not screened]
+
     # 待写入：记账里已有的只做原位更新；新时刻受 max_new 与 max_per_day 限制
     todo = []
     newly = []
     pending_new = 0
     planned_total = day_total
-    for t, text in all_entries:
+    for t, text, _screened in all_entries:
         if t in recorded:
             # 已发布过：页面还在就原位刷新，不在就不复活
             if t in on_page:
@@ -379,7 +392,7 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
                 log[date].append(t)
         log[date].sort()
         save_published_log(log)
-    return "ok", added, updated
+    return "ok", added, updated, unscreened
 
 
 def replace_block(path, start, end, inner):
@@ -491,7 +504,7 @@ def main():
         report["daily_error"] = err
     else:
         daily_html = os.path.join(SITE, "daily.html")
-        action, added, updated = sync_daily(daily_html, date, state)
+        action, added, updated, unscreened = sync_daily(daily_html, date, state)
         if action == "no-anchor":
             report["steps"].append("daily.html 缺少锚点，未更新")
         elif action == "no-entry":
@@ -501,6 +514,12 @@ def main():
                 "daily.html 已同步：新增 %d 条，更新 %d 条" % (added, updated))
             report["daily_added"] = added
             report["daily_updated"] = updated
+            # C 方案：不阻断发布，但把未筛选来源数量报出来
+            if unscreened:
+                report["unscreened_internal"] = len(unscreened)
+                report["steps"].append(
+                    "警告：%d 条来自内部摘要 summary（未标记 public_text），"
+                    "未经公开筛选：%s" % (len(unscreened), ", ".join(unscreened)))
             if added or updated:
                 report["changed"] = True
             else:
