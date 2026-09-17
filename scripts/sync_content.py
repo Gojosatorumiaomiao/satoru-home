@@ -320,31 +320,34 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     # 否则手工调整页面后，脚本会把旧时刻当新条目补发。
     recorded = set(log.get(date, []))
     on_page = published_times(path, date)
-    day_total = len(recorded | on_page)
+
+    # 方案 1（按时段顺序配对）：当天第 N 次运行发布第 N 条。
+    # 不再按“最新未发布”取条目，也不从页面反推序号——
+    # 而是以记账长度为游标：记了 k 条，下次就发第 k+1 条。
+    # 这样六个时段各自对应一条，某次失败不会导致后续错位或超发。
+    k = len(recorded)
 
     # C 方案：行为不变，但统计有多少条来自未筛选的内部摘要，
     # 由调用方在报告里计数并报警，不静默当作已授权公开文案。
     unscreened = [t for t, _text, screened in all_entries if not screened]
 
-    # 待写入：记账里已有的只做原位更新；新时刻受 max_new 与 max_per_day 限制
+    # 待写入：记账里已有的只做原位更新
     todo = []
     newly = []
-    pending_new = 0
-    planned_total = day_total
-    for t, text, _screened in all_entries:
+    for idx, (t, text, _screened) in enumerate(all_entries):
         if t in recorded:
             # 已发布过：页面还在就原位刷新，不在就不复活
             if t in on_page:
                 todo.append((t, text))
             continue
-        if planned_total >= max_per_day:
+        # 只取“下一条待发布”对应的那一条（方案 1）
+        if idx != k:
             continue
-        if pending_new >= max_new:
+        if len(recorded) >= max_per_day:
             continue
         todo.append((t, text))
-        pending_new += 1
-        planned_total += 1
         newly.append(t)
+        break
 
     head, body, tail = s[:i + len(D_START)], s[i + len(D_START):j], s[j:]
 
