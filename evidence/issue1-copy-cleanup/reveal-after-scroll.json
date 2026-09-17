@@ -1,0 +1,82 @@
+[
+  {
+    "total": 3,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 3,
+    "page": "index.html",
+    "viewport": "375"
+  },
+  {
+    "total": 4,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 4,
+    "page": "about.html",
+    "viewport": "375"
+  },
+  {
+    "total": 2,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 2,
+    "page": "stories.html",
+    "viewport": "375"
+  },
+  {
+    "total": 2,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 2,
+    "page": "daily.html",
+    "viewport": "375"
+  },
+  {
+    "total": 0,
+    "hiddenAfterScroll": 0,
+    "minOpacity": null,
+    "hasIn": 0,
+    "page": "gallery.html",
+    "viewport": "375"
+  },
+  {
+    "total": 3,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 3,
+    "page": "index.html",
+    "viewport": "1280"
+  },
+  {
+    "total": 4,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 4,
+    "page": "about.html",
+    "viewport": "1280"
+  },
+  {
+    "total": 2,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 2,
+    "page": "stories.html",
+    "viewport": "1280"
+  },
+  {
+    "total": 2,
+    "hiddenAfterScroll": 0,
+    "minOpacity": 1,
+    "hasIn": 2,
+    "page": "daily.html",
+    "viewport": "1280"
+  },
+  {
+    "total": 0,
+    "hiddenAfterScroll": 0,
+    "minOpacity": null,
+    "hasIn": 0,
+    "page": "gallery.html",
+    "viewport": "1280"
+  }
+]
