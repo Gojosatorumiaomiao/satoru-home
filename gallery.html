@@ -36,11 +36,16 @@
   <section aria-label="五条悟插画与影像作品">
     <div class="portrait-gallery">
       <figure class="portrait-card portrait-card-video" id="date-kiss-2026-09-19">
-        <video class="gallery-video" controls playsinline preload="metadata" poster="assets/gallery/date-kiss-2026-09-19.webp" aria-label="晚风里的吻：河边咖啡馆无声约会短片，后半段带日文字幕">
-          <source src="assets/gallery/date-kiss-2026-09-19-silent-v2.mp4" type="video/mp4">
-          <track kind="subtitles" srclang="ja" label="日本語" src="assets/gallery/date-kiss-2026-09-19.vtt" default>
-          你的浏览器暂不支持视频播放。
-        </video>
+        <div class="gallery-video-wrap">
+          <video id="date-kiss-video" class="gallery-video" controls playsinline preload="metadata" poster="assets/gallery/date-kiss-2026-09-19.webp" aria-label="晚风里的吻：河边咖啡馆无声约会短片，后半段带日中双语字幕">
+            <source src="assets/gallery/date-kiss-2026-09-19-silent-v2.mp4" type="video/mp4">
+            你的浏览器暂不支持视频播放。
+          </video>
+          <div id="date-kiss-caption" class="gallery-video-caption" aria-hidden="true">
+            <span class="caption-ja">やっぱり、照れてるじゃん。</span>
+            <span class="caption-zh">果然，害羞了嘛。</span>
+          </div>
+        </div>
         <figcaption>晚风里的吻 · <time datetime="2026-09-19">2026.09.19</time></figcaption>
       </figure>
       <figure class="portrait-card" id="gojo-2026-09-19">
@@ -102,5 +107,23 @@
 </footer>
 
 <script src="js/main.js"></script>
+<script>
+  (() => {
+    const video = document.getElementById('date-kiss-video');
+    const caption = document.getElementById('date-kiss-caption');
+    if (!video || !caption) return;
+
+    const syncCaption = () => {
+      const visible = video.currentTime >= 6.15 && video.currentTime <= 8.65;
+      caption.classList.toggle('is-visible', visible);
+      caption.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    };
+
+    video.addEventListener('timeupdate', syncCaption);
+    video.addEventListener('seeking', syncCaption);
+    video.addEventListener('loadedmetadata', syncCaption);
+    video.addEventListener('ended', syncCaption);
+  })();
+</script>
 </body>
 </html>
