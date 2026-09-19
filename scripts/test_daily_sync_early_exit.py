@@ -148,10 +148,10 @@ except Exception as e:
 check("1b 仅 thought：仍输出 JSON 报告", ok_json, "" if ok_json else err.strip()[-200:])
 if ok_json:
     steps = " | ".join(rep.get("steps", []))
-    check("1c 仅 thought：报告为 no-entry 文案", "没有可公开的动态条目" in steps,
+    check("1c 仅 thought：报告为无可发布成稿文案", "没有可发布的公共成稿" in steps,
           steps)
-    check("1d 仅 thought：未写 daily_added/unscreened_internal",
-          "daily_added" not in rep and "unscreened_internal" not in rep, steps)
+    check("1d 仅 thought：未写 daily_added",
+          "daily_added" not in rep, steps)
 check("1e 仅 thought：页面未被修改", page_text(site) == before)
 check("1f 仅 thought：未写记账文件", read_log(site) is None,
       str(read_log(site)))
@@ -179,12 +179,13 @@ check("2d 缺锚点：页面未被修改", page_text(site) == before)
 check("2e 缺锚点：未写记账文件", read_log(site) is None, str(read_log(site)))
 shutil.rmtree(root, ignore_errors=True)
 
-# ---------- 用例 3 / 4：正常路径 — unscreened 与重跑幂等 ----------
-# 注意：脚本按设计每次最多新增 1 条（max_new=1），所以两条目分两次运行写入。
-# 未筛选计数 unscreened_internal 来自源数据，同一状态下每次运行都应为 1。
-root, site, sp, drv = make_case("", state(DATE, [
-    contact("08:15", summary="仅内部摘要"),                 # 未筛选
-    contact("14:15", public="明确标记的公开成稿"),           # 已筛选
+# ---------- 用例 3 / 4：正常路径 — 闸门分流与重跑幂等 ----------
+# 闸门改为「有 public_text 且扫描通过才发布」后，仅有 summary 的条目被跳过，
+# 不再计入 unscreened_internal。每次运行最多新增 1 条（max_new=1）。
+root, site, sp, drv = make_case("""绝密代号
+""", state(DATE, [
+    contact("08:15", summary="仅内部摘要，无公开成稿"),      # 应被跳过
+    contact("14:15", public="明确标记的公开成稿"),           # 应被发布
 ]))
 
 
@@ -204,30 +205,26 @@ if ok3:
     check("3c 正常路径 · 第一次运行新增 1 条（每次上限一条）",
           rep3.get("daily_added") == 1,
           "daily_added=%r" % rep3.get("daily_added"))
-check("3d 正常路径：仅 summary 一条计入 unscreened_internal",
-      ok3 and rep3.get("unscreened_internal") == 1,
-      "unscreened_internal=%r" % (rep3.get("unscreened_internal") if ok3 else None))
-if ok3:
-    warn = [s for s in rep3.get("steps", []) if "未经公开筛选" in s]
-    check("3e 正常路径：警告行只点名 08:15，不含 14:15",
-          len(warn) == 1 and "08:15" in warn[0] and "14:15" not in warn[0],
-          " | ".join(warn) or "（无警告行）")
+check("3d 正常路径：仅有 summary 的条目被跳过并点名 no-public-text",
+      ok3 and any(s.get("time") == "08:15" and s.get("reason") == "no-public-text"
+                  for s in (rep3.get("skipped") or [])),
+      "skipped=%r" % (rep3.get("skipped") if ok3 else None))
 log3 = read_log(site)
-check("3f 正常路径 · 第一次运行记账只含 08:15",
-      log3 == {DATE: ["08:15"]}, str(log3))
+check("3f 正常路径 · 第一次运行记账只含 14:15",
+      log3 == {DATE: ["14:15"]}, str(log3))
 
 rc, out, err = run(drv, site, sp)
 rep3b, ok3b = parse(out, err)
-check("3g 正常路径 · 第二次运行新增 1 条（另一时刻）",
-      rc == 0 and ok3b and rep3b.get("daily_added") == 1,
+check("3g 正常路径 · 第二次运行不重复新增",
+      rc == 0 and ok3b and rep3b.get("daily_added") == 0,
       "rc=%d daily_added=%r" % (rc, rep3b.get("daily_added") if ok3b else None))
 log3b = read_log(site)
-check("3h 正常路径 · 两次运行后记账含两个时刻",
-      log3b == {DATE: ["08:15", "14:15"]}, str(log3b))
+check("3h 正常路径 · 两次运行后记账仍只有 14:15",
+      log3b == {DATE: ["14:15"]}, str(log3b))
 page3 = page_text(site)
-check("3i 正常路径 · 页面含两个条目锚点",
-      page3.count('id="daily-%s-0815"' % DATE) == 1
-      and page3.count('id="daily-%s-1415"' % DATE) == 1,
+check("3i 正常路径 · 页面只含被发布的 14:15 锚点",
+      page3.count('id="daily-%s-1415"' % DATE) == 1
+      and page3.count('id="daily-%s-0815"' % DATE) == 0,
       "0815=%d 1415=%d" % (page3.count('id="daily-%s-0815"' % DATE),
                             page3.count('id="daily-%s-1415"' % DATE)))
 

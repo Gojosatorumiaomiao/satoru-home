@@ -33,6 +33,10 @@ SRC_STORIES = os.path.join(WS, "stories")
 DAILY_JSON = os.path.join(WS, "data", "satoru-daily.json")
 OUT_STORIES = os.path.join(SITE, "stories")
 
+# 公开文本禁词表：真实词表只留本机，不进仓库。
+# 可用环境变量 SATORU_BLOCKLIST 覆盖路径（测试用）。
+BLOCKLIST_FILE = os.path.join(WS, "data", "public-blocklist.txt")
+
 # 页面中需要替换的区块，用注释锚点标记
 A_START = "<!-- stories:list:start -->"
 A_END = "<!-- stories:list:end -->"
@@ -131,33 +135,64 @@ def daily_state_for(state, date):
     return state, None
 
 
+def scan_public_text(text):
+    """扫描待公开文本。返回 (ok, reason)。
+
+    禁词表是本机文件，不进仓库（见 docs：真实禁词表只留本机）。
+    读取顺序：环境变量 SATORU_BLOCKLIST 指定的路径；否则
+    workspace/data/public-blocklist.txt（本机、已 gitignore）。
+    两个位置都没有时 **不是“通过”** —— 扫描无法进行，
+    返回 ok=False 让调用方跳过并报告，不静默放行。
+    """
+    path = os.environ.get("SATORU_BLOCKLIST") or BLOCKLIST_FILE
+    if not os.path.isfile(path):
+        return False, "no-blocklist"
+    try:
+        raw = open(path, encoding="utf-8").read()
+    except Exception as exc:
+        return False, "blocklist-error:%s" % exc.__class__.__name__
+    terms = [ln.strip() for ln in raw.splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    if not terms:
+        return False, "blocklist-empty"
+    low = text.lower()
+    for term in terms:
+        if term.lower() in low:
+            return False, "blocked"
+    return True, "ok"
+
+
 def daily_entries_for(state, date):
-    """取当天所有适合公开的动态条目，按时间排序。
+    """取当天可发布的动态条目，按时间排序。
 
-    每条返回 (time, text, screened)。一天可有多条；用 time 作为条目锚点。
+    每条返回 (time, text) 或 (time, None) —— 后者表示该条被闸门拦下。
 
-    screened 表示该条是否来自明确标记为"可公开"的来源：
-    优先取 contact["public_text"]；没有则退回 contact["summary"]，
-    此时 screened=False —— 行为不变，但调用方应把它计入未筛选数量并报警。
+    闸门规则（用户指定）：明确公开的 public_text → 扫描 → 发布。
+      - 没有 public_text（只有内部 summary）  -> 跳过并报告
+      - 扫描命中禁词                        -> 跳过并报告
+      - 禁词表缺失/不可读/为空（无法扫描）    -> 跳过并报告
+    被跳过的条目 **不消耗发布名额**，也不影响已有页面。
     """
     if not state:
-        return []
+        return [], []
     contacts = state.get("contacts") or []
-    out = []
+    out, skipped = [], []
     for c in contacts:
         if c.get("kind") != "normal":
             continue
         t = (c.get("time") or "").strip()
         public = (c.get("public_text") or "").strip()
-        if public:
-            text, screened = public, True
-        else:
-            text, screened = (c.get("summary") or "").strip(), False
-        if not t or not text:
+        if not public:
+            skipped.append({"time": t, "reason": "no-public-text"})
             continue
-        out.append((t, text, screened))
+        ok, why = scan_public_text(public)
+        if not ok:
+            skipped.append({"time": t, "reason": why})
+            continue
+        out.append((t, public))
+        
     out.sort(key=lambda x: x[0])
-    return out
+    return out, skipped
 
 
 def story_slug(date, title, index):
@@ -246,11 +281,10 @@ def render_daily_entry(date, t, text):
 
 def render_daily_list(state, date):
     """渲染当天全部动态条目。同一天多条分别保留。"""
-    entries = daily_entries_for(state, date)
+    entries, _skipped = daily_entries_for(state, date)
     if not entries:
         return None
-    return "\n".join(render_daily_entry(date, t, text)
-                     for t, text, _screened in entries)
+    return "\n".join(render_daily_entry(date, t, text) for t, text in entries)
 
 
 MAX_PER_DAY = 6      # 每天最多发布的动态条数
@@ -299,20 +333,24 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     - 同一时刻重跑时原位更新，不新增重复条目。
     - 不删除其它日期的条目。
     - 已发布时刻记录在 daily-published.json，不依赖页面反推。
-    返回 (action, added, updated, unscreened)。
+    返回 (action, added, updated, skipped)。
 
     所有返回路径都必须给出四项，否则调用方在生成报告前就会解包失败：
     早退（no-entry / no-anchor）用空列表占位第四项。
+
+    skipped 是被闸门拦下的条目（缺 public_text / 命中禁词 / 无法扫描）。
+    它们**不消耗发布名额**：发布游标只按已记账的条目推进，
+    不被跳过项占位；当天页面上已有内容也不受影响。
     """
-    all_entries = daily_entries_for(state, date)
+    all_entries, skipped = daily_entries_for(state, date)
     if not all_entries:
-        return "no-entry", 0, 0, []
+        return "no-entry", 0, 0, skipped
 
     s = open(path, encoding="utf-8").read()
     i = s.find(D_START)
     j = s.find(D_END)
     if i == -1 or j == -1:
-        return "no-anchor", 0, 0, []
+        return "no-anchor", 0, 0, skipped
 
     log = load_published_log()
     # 记账是唯一真相：某时刻一旦记过，就不再当作新条目。
@@ -321,33 +359,25 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     recorded = set(log.get(date, []))
     on_page = published_times(path, date)
 
-    # 方案 1（按时段顺序配对）：当天第 N 次运行发布第 N 条。
-    # 不再按“最新未发布”取条目，也不从页面反推序号——
-    # 而是以记账长度为游标：记了 k 条，下次就发第 k+1 条。
-    # 这样六个时段各自对应一条，某次失败不会导致后续错位或超发。
-    k = len(recorded)
-
-    # C 方案：行为不变，但统计有多少条来自未筛选的内部摘要，
-    # 由调用方在报告里计数并报警，不静默当作已授权公开文案。
-    unscreened = [t for t, _text, screened in all_entries if not screened]
-
-    # 待写入：记账里已有的只做原位更新
+    # 游标口径：用**稳定时刻**判断是否已发布，不用过滤后的数组下标。
+    # 过滤结果会随 public_text 补齐 / 禁词表变化而改变，
+    # 若拿「过滤后下标 == 记账长度」配对，早时段条目被过滤过一次之后
+    # 下标永远对不上，就再也发不出去（复核已复现）。
+    # 改为：从「合格且未记账」的条目里按时间取最早一条。
+    # 已记过的不再当新条目，已撤下的记录也不复活。
     todo = []
     newly = []
-    for idx, (t, text, _screened) in enumerate(all_entries):
+    for t, text in all_entries:
         if t in recorded:
             # 已发布过：页面还在就原位刷新，不在就不复活
             if t in on_page:
                 todo.append((t, text))
-            continue
-        # 只取“下一条待发布”对应的那一条（方案 1）
-        if idx != k:
-            continue
-        if len(recorded) >= max_per_day:
-            continue
+    # 每次最多新增一条（all_entries 已按时间排序）；每天不超过 max_per_day 条
+    pending = [(t, text) for t, text in all_entries if t not in recorded]
+    if pending and len(recorded) < max_per_day:
+        t, text = pending[0]
         todo.append((t, text))
         newly.append(t)
-        break
 
     head, body, tail = s[:i + len(D_START)], s[i + len(D_START):j], s[j:]
 
@@ -398,7 +428,7 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
                 log[date].append(t)
         log[date].sort()
         save_published_log(log)
-    return "ok", added, updated, unscreened
+    return "ok", added, updated, skipped
 
 
 def replace_block(path, start, end, inner):
@@ -510,26 +540,27 @@ def main():
         report["daily_error"] = err
     else:
         daily_html = os.path.join(SITE, "daily.html")
-        action, added, updated, unscreened = sync_daily(daily_html, date, state)
+        action, added, updated, skipped = sync_daily(daily_html, date, state)
         if action == "no-anchor":
             report["steps"].append("daily.html 缺少锚点，未更新")
         elif action == "no-entry":
-            report["steps"].append("当天没有可公开的动态条目")
+            report["steps"].append("当天没有可发布的公共成稿")
         else:
             report["steps"].append(
                 "daily.html 已同步：新增 %d 条，更新 %d 条" % (added, updated))
             report["daily_added"] = added
             report["daily_updated"] = updated
-            # C 方案：不阻断发布，但把未筛选来源数量报出来
-            if unscreened:
-                report["unscreened_internal"] = len(unscreened)
-                report["steps"].append(
-                    "警告：%d 条来自内部摘要 summary（未标记 public_text），"
-                    "未经公开筛选：%s" % (len(unscreened), ", ".join(unscreened)))
             if added or updated:
                 report["changed"] = True
             else:
                 report["steps"].append("本时段已发布，跳过")
+
+        # 闸门拦下的条目：跳过并报告，不消耗名额、不动已有页面
+        if skipped:
+            report["skipped"] = skipped
+            for item in skipped:
+                report["steps"].append(
+                    "跳过 %s：%s" % (item["time"] or "(无时刻)", item["reason"]))
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
