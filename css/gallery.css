@@ -8,8 +8,18 @@
 .portrait-card a { display: block; border-radius: 12px; overflow: hidden; }
 .portrait-card a:focus-visible { outline: 3px solid var(--blue); outline-offset: 5px; }
 .portrait-card img { display: block; width: 100%; height: auto; }
+.portrait-card-video { grid-column: span 2; }
+.gallery-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #0b0f17;
+}
 .portrait-card figcaption { margin-top: 14px; font-size: 1rem; color: var(--ink); }
 .gallery-note { margin-top: 28px; }
 @media (max-width: 760px) {
   .portrait-gallery { grid-template-columns: 1fr; gap: 32px; }
+  .portrait-card-video { grid-column: auto; }
 }
