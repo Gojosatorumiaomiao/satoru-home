@@ -339,8 +339,8 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     早退（no-entry / no-anchor）用空列表占位第四项。
 
     skipped 是被闸门拦下的条目（缺 public_text / 命中禁词 / 无法扫描）。
-    它们**不消耗发布名额**：游标仍按记账长度推进，
-    当天页面上已有内容也不受影响。
+    它们**不消耗发布名额**：发布游标只按已记账的条目推进，
+    不被跳过项占位；当天页面上已有内容也不受影响。
     """
     all_entries, skipped = daily_entries_for(state, date)
     if not all_entries:
@@ -359,29 +359,25 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     recorded = set(log.get(date, []))
     on_page = published_times(path, date)
 
-    # 方案 1（按时段顺序配对）：当天第 N 次运行发布第 N 条。
-    # 不再按“最新未发布”取条目，也不从页面反推序号——
-    # 而是以记账长度为游标：记了 k 条，下次就发第 k+1 条。
-    # 这样六个时段各自对应一条，某次失败不会导致后续错位或超发。
-    k = len(recorded)
-
-    # 待写入：记账里已有的只做原位更新
+    # 游标口径：用**稳定时刻**判断是否已发布，不用过滤后的数组下标。
+    # 过滤结果会随 public_text 补齐 / 禁词表变化而改变，
+    # 若拿「过滤后下标 == 记账长度」配对，早时段条目被过滤过一次之后
+    # 下标永远对不上，就再也发不出去（复核已复现）。
+    # 改为：从「合格且未记账」的条目里按时间取最早一条。
+    # 已记过的不再当新条目，已撤下的记录也不复活。
     todo = []
     newly = []
-    for idx, (t, text) in enumerate(all_entries):
+    for t, text in all_entries:
         if t in recorded:
             # 已发布过：页面还在就原位刷新，不在就不复活
             if t in on_page:
                 todo.append((t, text))
-            continue
-        # 只取“下一条待发布”对应的那一条（方案 1）
-        if idx != k:
-            continue
-        if len(recorded) >= max_per_day:
-            continue
+    # 每次最多新增一条（all_entries 已按时间排序）；每天不超过 max_per_day 条
+    pending = [(t, text) for t, text in all_entries if t not in recorded]
+    if pending and len(recorded) < max_per_day:
+        t, text = pending[0]
         todo.append((t, text))
         newly.append(t)
-        break
 
     head, body, tail = s[:i + len(D_START)], s[i + len(D_START):j], s[j:]
 
