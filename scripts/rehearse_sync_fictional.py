@@ -51,7 +51,9 @@ with open(os.path.join(sc.SRC_STORIES, DATE + ".md"), "w", encoding="utf-8") as 
     fh.write("# %s 端到端样例\n\n%s\n" % (DATE, "\n\n".join(paras)))
 with open(sc.DAILY_JSON, "w", encoding="utf-8") as fh:
     json.dump({"date": DATE, "contacts": [
-        {"kind": "normal", "time": "09:00", "summary": "虚构动态：早上在窗边翻笔记。"}]},
+        {"kind": "normal", "time": "09:00",
+         "summary": "虚构内部摘要",
+         "public_text": "虚构公开动态：早上在窗边翻笔记。"}]},
         fh, ensure_ascii=False)
 
 sys.argv = ["sync_content.py", DATE]
