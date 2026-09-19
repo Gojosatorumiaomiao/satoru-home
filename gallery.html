@@ -42,8 +42,8 @@
             你的浏览器暂不支持视频播放。
           </video>
           <div id="date-kiss-caption" class="gallery-video-caption" aria-hidden="true">
-            <span class="caption-ja">やっぱり、照れてるじゃん。</span>
-            <span class="caption-zh">果然，害羞了嘛。</span>
+            <span id="date-kiss-caption-ja" class="caption-ja"></span>
+            <span id="date-kiss-caption-zh" class="caption-zh"></span>
           </div>
         </div>
         <figcaption>晚风里的吻 · <time datetime="2026-09-19">2026.09.19</time></figcaption>
@@ -111,10 +111,26 @@
   (() => {
     const video = document.getElementById('date-kiss-video');
     const caption = document.getElementById('date-kiss-caption');
-    if (!video || !caption) return;
+    const captionJa = document.getElementById('date-kiss-caption-ja');
+    const captionZh = document.getElementById('date-kiss-caption-zh');
+    if (!video || !caption || !captionJa || !captionZh) return;
 
     const syncCaption = () => {
-      const visible = video.currentTime >= 6.15 && video.currentTime <= 8.65;
+      const t = video.currentTime;
+      let ja = '';
+      let zh = '';
+
+      if (t >= 6.41 && t < 7.20) {
+        ja = 'やっぱり、';
+        zh = '果然，';
+      } else if (t >= 7.20 && t <= 8.53) {
+        ja = '照れてるじゃん。';
+        zh = '害羞了嘛。';
+      }
+
+      const visible = Boolean(ja);
+      captionJa.textContent = ja;
+      captionZh.textContent = zh;
       caption.classList.toggle('is-visible', visible);
       caption.setAttribute('aria-hidden', visible ? 'false' : 'true');
     };
