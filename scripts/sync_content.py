@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import datetime
 
 WS = "/home/hyr/.openclaw/workspace"
@@ -135,6 +136,43 @@ def daily_state_for(state, date):
     return state, None
 
 
+# 匹配前先去掉的零宽 / 双向控制字符（规范化副本专用，不影响发布正文）。
+_SCAN_DROP_CHARS = (
+    "\u200b"  # zero width space
+    "\u200c"  # zero width non-joiner
+    "\u200d"  # zero width joiner
+    "\u2060"  # word joiner
+    "\ufeff"  # zero width no-break space
+    "\u180e"  # mongolian vowel separator
+    "\u00ad"  # soft hyphen
+    "\u200e\u200f"      # LRM / RLM
+    "\u202a\u202b\u202c\u202d\u202e"  # 双向嵌入/覆盖
+    "\u2066\u2067\u2068\u2069"        # 双向隔离
+)
+# 保留的空白与换行（不当作控制字符删除）
+_SCAN_KEEP_WS = "\t\n\r"
+
+
+def normalize_for_scan(text):
+    """生成**只用于禁词匹配**的规范化副本。
+
+    1. NFKC：把全角/兼容字符折成基本形式（ＳＥＣＲＥＴ -> SECRET）；
+    2. 去掉零宽与双向控制字符（含 U+200B 等），
+       避免「绝<U+200B>密代号」这类可见相同的写法绕过子串匹配。
+
+    发布正文一律使用原文，**不用**这个副本改写公开内容。
+    只做匹配，不回显命中的禁词或命中位置。
+    """
+    out = []
+    for ch in unicodedata.normalize("NFKC", text or ""):
+        if ch in _SCAN_DROP_CHARS:
+            continue
+        if ch not in _SCAN_KEEP_WS and unicodedata.category(ch) in ("Cc", "Cf", "Cs"):
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def scan_public_text(text):
     """扫描待公开文本。返回 (ok, reason)。
 
@@ -143,6 +181,16 @@ def scan_public_text(text):
     workspace/data/public-blocklist.txt（本机、已 gitignore）。
     两个位置都没有时 **不是“通过”** —— 扫描无法进行，
     返回 ok=False 让调用方跳过并报告，不静默放行。
+
+    匹配前对**副本**做 NFKC 规范化并去掉零宽/控制字符（见
+    normalize_for_scan），因此全角或插入零宽的相同写法同样会被拦下；
+    发布正文仍保留 public_text 原文，不做任何改写。
+    返回的 reason 只给类别（blocked / no-blocklist / ...），不回显命中内容。
+
+    范围说明（不要扩大解读）：本函数只做「规范化后的禁词子串匹配」，
+    当前仅被日常动态条目调用（daily_entries_for -> sync_daily）；
+    故事归档路径不经过本函数。类型检测（邮箱/电话/内部标记等）
+    与更完整的通用扫描器**未接入**，不在本次覆盖范围内。
     """
     path = os.environ.get("SATORU_BLOCKLIST") or BLOCKLIST_FILE
     if not os.path.isfile(path):
@@ -151,11 +199,17 @@ def scan_public_text(text):
         raw = open(path, encoding="utf-8").read()
     except Exception as exc:
         return False, "blocklist-error:%s" % exc.__class__.__name__
-    terms = [ln.strip() for ln in raw.splitlines()
-             if ln.strip() and not ln.strip().startswith("#")]
+    terms = []
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        n = normalize_for_scan(s)
+        if n:
+            terms.append(n)
     if not terms:
         return False, "blocklist-empty"
-    low = text.lower()
+    low = normalize_for_scan(text).lower()
     for term in terms:
         if term.lower() in low:
             return False, "blocked"

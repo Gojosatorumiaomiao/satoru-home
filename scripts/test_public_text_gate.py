@@ -148,6 +148,55 @@ def run():
     sc.sync_daily(page4, "2026-09-19", st4)
     check("重跑不重复", len(ids(page4)) == n1 == 1, str(ids(page4)))
 
+    # ---- 8：规范化匹配（全角 / 零宽绕过） ----
+    # 复核要求：全角与零宽写法不能再绕过；命中只给类别，不回显正文；
+    # 发布正文保留原文，不因扫描而改写。
+    print("[8] 全角 / 零宽绕过会被拦截；发布正文保留原文")
+    tmp = os.path.join(base, "norm")
+    os.makedirs(tmp)
+    ZW = "\u200b"
+    # 词表三条：一条 ASCII 虚构词、一条中虚构词、一条**全角**写的虚构词
+    page5 = make_env(tmp, "FICTIONSECRET\n虚构禁词乙\nＦＵＬＬＷＩＤＴＨ\n")
+    st5 = state([
+        {"time": "01:00", "kind": "normal", "summary": "内部1",
+         "public_text": "全角绕过：ＦＩＣＴＩＯＮＳＥＣＲＥＴ"},
+        {"time": "02:00", "kind": "normal", "summary": "内部2",
+         "public_text": "零宽绕过：虚" + ZW + "构禁词乙"},
+        {"time": "03:00", "kind": "normal", "summary": "内部3",
+         "public_text": "词表全角：fullwidth"},
+        {"time": "04:00", "kind": "normal", "summary": "内部4",
+         "public_text": "正常公开稿：天气不错"},
+    ])
+    action, added, updated, skipped = sc.sync_daily(page5, "2026-09-19", st5)
+    reasons = {s["time"]: s["reason"] for s in skipped}
+    check("全角写法（ＦＩＣＴＩＯＮＳＥＣＲＥＴ）被拦下",
+          reasons.get("01:00") == "blocked", str(reasons))
+    check("插入零宽的相同写法被拦下",
+          reasons.get("02:00") == "blocked", str(reasons))
+    check("词表里的全角词也能匹配 ASCII 正文",
+          reasons.get("03:00") == "blocked", str(reasons))
+    check("未被绕过的正常公开稿照常发布",
+          ids(page5) == ["daily-2026-09-19-0400"] and added == 1, str(ids(page5)))
+    check("命中项只给类别，不回显正文或禁词",
+          all(set(s.keys()) <= {"time", "reason"} for s in skipped)
+          and all(v == "blocked" for k, v in reasons.items()),
+          str(skipped))
+
+    # 发布正文保留原文：含零宽与全角的合格稿在页面上逐字保留
+    tmp = os.path.join(base, "verbatim")
+    os.makedirs(tmp)
+    page6 = make_env(tmp, "FICTIONSECRET\n")
+    original = "公开稿：全角ＡＢＣ" + ZW + "正常叙述"
+    normalized = "公开稿：全角ABC正常叙述"
+    st6 = state([{"time": "02:15", "kind": "normal", "summary": "A",
+                 "public_text": original}])
+    action, added, updated, skipped = sc.sync_daily(page6, "2026-09-19", st6)
+    page6_text = open(page6, encoding="utf-8").read()
+    check("合格公开稿被发布", added == 1 and ids(page6) == ["daily-2026-09-19-0215"],
+          str(ids(page6)))
+    check("发布正文逐字保留原文（含零宽与全角）", original in page6_text)
+    check("页面未被写入规范化副本", normalized not in page6_text)
+
     shutil.rmtree(base, ignore_errors=True)
     print()
     print("通过 %d 项，失败 %d 项" % (PASS, FAIL))
