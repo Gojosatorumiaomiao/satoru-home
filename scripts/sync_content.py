@@ -47,6 +47,11 @@ D_END = "<!-- daily:list:end -->"
 # 归档文件名：<date>.md / <date>-2.md / <date>-3.md（一天可有多篇）
 ARCHIVE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-(\d+))?\.md$")
 
+# 时刻格式：HH:MM（24 小时制）。动态条目的锚点 = 日期 + 时刻
+# （entry_id 去掉冒号），因此缺失/空白/非法时刻会直接产出坏锚点
+# （如 daily-2026-09-21-）并把空串写进发布账本，必须在校验阶段跳过。
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
 
 def html_escape(t):
     return (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
@@ -279,16 +284,28 @@ def scan_public_text(text):
     return True, "ok"
 
 
+def valid_time(t):
+    """时刻必须是 HH:MM（24 小时制），否则无法生成合法锚点。
+
+    缺失（键不存在）、空白串与非法写法（如 "25:99"、"9:00 " 之外的
+    "9"、"9.00"）一律判为无效。main 也在此处过滤，本 PR 的闸门改写
+    曾把这一步丢掉，属于回归。
+    """
+    return bool(_TIME_RE.match(t))
+
+
 def daily_entries_for(state, date):
     """取当天可发布的动态条目，按时间排序。
 
     每条返回 (time, text) 或 (time, None) —— 后者表示该条被闸门拦下。
 
     闸门规则（用户指定）：明确公开的 public_text → 扫描 → 发布。
+      - 时刻缺失/空白/非法（非 HH:MM）        -> 跳过并报告 invalid-time
       - 没有 public_text（只有内部 summary）  -> 跳过并报告
       - 扫描命中禁词                        -> 跳过并报告
       - 禁词表缺失/不可读/为空（无法扫描）    -> 跳过并报告
-    被跳过的条目 **不消耗发布名额**，也不影响已有页面。
+    被跳过的条目 **不消耗发布名额**，也不影响已有页面；
+    返回的 reason 只给类别，不回显正文。
     """
     if not state:
         return [], []
@@ -298,6 +315,10 @@ def daily_entries_for(state, date):
         if c.get("kind") != "normal":
             continue
         t = (c.get("time") or "").strip()
+        # 先校验时刻：坏时刻即使有合格 public_text 也会生成坏锚点/坏账本
+        if not valid_time(t):
+            skipped.append({"time": t, "reason": "invalid-time"})
+            continue
         public = (c.get("public_text") or "").strip()
         if not public:
             skipped.append({"time": t, "reason": "no-public-text"})
@@ -307,7 +328,7 @@ def daily_entries_for(state, date):
             skipped.append({"time": t, "reason": why})
             continue
         out.append((t, public))
-        
+
     out.sort(key=lambda x: x[0])
     return out, skipped
 

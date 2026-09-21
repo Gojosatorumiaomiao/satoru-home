@@ -14,6 +14,8 @@
   3. 正常路径闸门分流（仅 summary 跳过 / 有 public_text 发布）与重跑幂等
   4. 禁词表缺失 / 为空 / 无法解析 -> 跳过并报告，页面与账本不变
   5. 命中禁词                  -> blocked，页面与账本不变
+  6. 时刻缺失 / 空白 / 非法（非 HH:MM） -> invalid-time，页面与账本不变
+     且不产生 `daily-<date>-` 空锚点；同状态里的合格条目照常发布
 
 本脚本只在临时目录内造数据、只调用被测脚本的 main()，
 不访问 /home/hyr/.openclaw/workspace 下的任何真实文件。
@@ -174,11 +176,17 @@ def fail_case(name, rc, err):
 
 
 def setup_existing(site, date=DATE):
-    """在页面与账本里预置一条**已发布**的旧条目，作为“失败时不得改动”的基线。"""
+    """在页面与账本里预置一条**已发布**的旧条目，作为“失败时不得改动”的基线。
+
+    预置块按真实渲染格式写（含 `<time>`），否则同步末尾的排序会因
+    找不到 `<time>` 而抛异常，把“坏时刻”的失败原因混淆为 fixture 本身不平。
+    """
     page = os.path.join(site, "daily.html")
     html = open(page, encoding="utf-8").read()
-    block = ('    <article class="post" id="daily-%s-0600">'
-             '<p>已发布的旧条目</p></article>' % date)
+    block = ('    <article class="post" id="daily-%s-0600">\n'
+             '      <time>%s · 06:00</time>\n'
+             '      <p>已发布的旧条目</p>\n'
+             '    </article>' % (date, date))
     html = html.replace("    " + D_START, "    " + D_START + "\n" + block, 1)
     with open(page, "w", encoding="utf-8") as f:
         f.write(html)
@@ -307,6 +315,83 @@ for tag, label, blkw, public_text, want_reason in FAIL_CASES:
     check("%se %s：页面逐字节不变" % (tag, label), page_bytes(site) == page_before)
     check("%sf %s：账本逐字节不变" % (tag, label), log_bytes(site) == log_before)
     shutil.rmtree(root, ignore_errors=True)
+
+# ---------- 用例 9–13：时刻缺失 / 空白 / 非法 -> invalid-time（页面与账本不变） ----------
+# 回归背景：闸门改写曾丢掉 main 对 `time` 的校验，坏时刻会以 ("", public_text)
+# 继续进入同步，生成 `daily-YYYY-MM-DD-` 空锚点并把空串写进发布账本。
+# 以下每例都预置一条已发布旧条目作为“失败时不得改动”的基线。
+BAD_TIMES = [
+    ("9", "时刻键缺失", None),
+    ("10", "时刻为空串", ""),
+    ("11", "时刻非法（25:99）", "25:99"),
+    ("12", "时刻非法（缺冒号，写法 9）", "9"),
+]
+for tag, label, bad_t in BAD_TIMES:
+    c = contact("10:15", summary="内部摘要", public="明确标记的合格公开稿")
+    if bad_t is None:
+        c.pop("time", None)          # 整键缺失
+        seen_t = ""
+    else:
+        c["time"] = bad_t
+        seen_t = bad_t
+    root, site, sp, drv, bl = make_case("", state(DATE, [c]))
+    setup_existing(site)
+    page_before, log_before = page_bytes(site), log_bytes(site)
+    rc, out, err = run(drv, site, sp, bl)
+    fail_case("%sa %s：进程正常退出（rc=0）" % (tag, label), rc, err)
+    rep, ok = parse(out, err)
+    check("%sb %s：输出 JSON 报告" % (tag, label), ok,
+          err.strip()[-200:] if not ok else "")
+    got = None
+    if ok:
+        got = [s.get("reason") for s in (rep.get("skipped") or [])
+               if s.get("time") == seen_t]
+    check("%sc %s：该条被跳过，reason=invalid-time" % (tag, label),
+          bool(got) and got[0] == "invalid-time",
+          "skipped=%r" % (rep.get("skipped") if ok else None))
+    check("%sd %s：跳过原因不含正文（只有 time/reason）" % (tag, label),
+          ok and all(set(s.keys()) <= {"time", "reason"}
+                     for s in (rep.get("skipped") or [])),
+          "skipped=%r" % (rep.get("skipped") if ok else None))
+    check("%se %s：新增 0 条" % (tag, label),
+          ok and rep.get("daily_added") in (0, None),
+          "daily_added=%r" % (rep.get("daily_added") if ok else None))
+    check("%sf %s：页面逐字节不变" % (tag, label), page_bytes(site) == page_before)
+    check("%sg %s：账本逐字节不变" % (tag, label), log_bytes(site) == log_before)
+    after_html = page_bytes(site).decode("utf-8")
+    check("%sh %s：未产生 daily-%s- 空锚点" % (tag, label, DATE),
+          ('id="daily-%s-"' % DATE) not in after_html,
+          "出现空锚点" if ('id="daily-%s-"' % DATE) in after_html else "")
+    log_now = read_log(site)
+    check("%si %s：账本未写入空串" % (tag, label),
+          not any("" in v for v in (log_now or {}).values()),
+          str(log_now))
+    shutil.rmtree(root, ignore_errors=True)
+
+# ---------- 用例 13：坏时刻的兄弟条目不影响同状态里的合格条目 ----------
+root, site, sp, drv, bl = make_case("", state(DATE, [
+    contact("25:99", summary="内部摘要", public="坏时刻的公开稿"),   # 应被跳过
+    contact("10:15", summary="内部摘要", public="合格公开稿"),        # 应被发布
+]))
+rc, out, err = run(drv, site, sp, bl)
+fail_case("13a 坏时刻旁证：进程正常退出（rc=0）", rc, err)
+rep13, ok13 = parse(out, err)
+check("13b 坏时刻旁证：输出 JSON 报告", ok13,
+      err.strip()[-200:] if not ok13 else "")
+check("13c 坏时刻旁证：新增的是 10:15（坏时刻不占名额）",
+      ok13 and rep13.get("daily_added") == 1,
+      "daily_added=%r" % (rep13.get("daily_added") if ok13 else None))
+check("13d 坏时刻旁证：25:99 被记为 invalid-time",
+      ok13 and any(s.get("reason") == "invalid-time" for s in (rep13.get("skipped") or [])),
+      "skipped=%r" % (rep13.get("skipped") if ok13 else None))
+log13 = read_log(site)
+check("13e 坏时刻旁证：账本只记 10:15", log13 == {DATE: ["10:15"]}, str(log13))
+page13 = page_bytes(site).decode("utf-8")
+check("13f 坏时刻旁证：页面只有 1015 锚点，无空锚点",
+      page13.count('id="daily-%s-1015"' % DATE) == 1
+      and ('id="daily-%s-"' % DATE) not in page13,
+      "1015=%d" % page13.count('id="daily-%s-1015"' % DATE))
+shutil.rmtree(root, ignore_errors=True)
 
 # ---------- 汇总 ----------
 bad = [n for n, ok, _ in results if not ok]
