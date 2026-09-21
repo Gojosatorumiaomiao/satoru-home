@@ -197,6 +197,60 @@ def run():
     check("发布正文逐字保留原文（含零宽与全角）", original in page6_text)
     check("页面未被写入规范化副本", normalized not in page6_text)
 
+    # ---- 9：通用类型检测（邮箱/手机/凭据/本机路径/IP/内部标记） ----
+    # 全部为虚构样例。要求：该拦的拦下、不该拦的放行，控制误报。
+    print("[9] 通用类型检测（正例）")
+    tmp = os.path.join(base, "types")
+    os.makedirs(tmp)
+    page7 = make_env(tmp, "虚构词表项\n")
+    positive = [
+        ("01:00", "联系 zhang@example.com 处理", "email"),
+        ("02:00", "打 13800138000 找他", "phone"),
+        ("03:00", "座机 010-12345678", "phone"),
+        ("04:00", "key sk-abcdefghijklmnop1234", "credential"),
+        ("05:00", "Authorization: Bearer abcdef123456", "credential"),
+        ("06:00", "文件在 /home/hyr/.openclaw/workspace", "local-path"),
+        ("07:00", "服务器 192.168.1.100 上", "ip-address"),
+        ("08:00", "【内部】这段不要公开", "internal-marker"),
+    ]
+    st7 = state([{"time": t, "kind": "normal", "summary": "内部%s" % t,
+                  "public_text": txt} for t, txt, _ in positive])
+    action, added, updated, skipped = sc.sync_daily(page7, "2026-09-19", st7)
+    got = {s["time"]: s["reason"] for s in skipped}
+    for t, txt, why in positive:
+        check("类型检测 %s -> %s" % (txt[:22], why), got.get(t) == why, str(got))
+    check("类型命中项一条都没发布", added == 0 and ids(page7) == [], str(ids(page7)))
+    check("类型命中项只给类别，不回显原文",
+          all(set(s.keys()) <= {"time", "reason"} for s in skipped),
+          str(skipped))
+
+    # 负向：正常文案不应被类型规则误伤
+    print("[9] 通用类型检测（负例，控制误报）")
+    tmp = os.path.join(base, "types-neg")
+    os.makedirs(tmp)
+    page8 = make_env(tmp, "虚构词表项\n")
+    negative = [
+        ("01:00", "2026年9月21日的安排"),
+        ("02:00", "只买了两份甜点，第三组过了"),
+        ("03:00", "订单 A1234 已发货"),
+        ("04:00", "【今日推荐】限定甜点"),
+        ("05:00", "下午 15:30 收工"),
+        ("06:00", "编号 20260921001"),
+    ]   # 额度为每日 6 条，负例控制在 6 条以内
+    st8 = state([{"time": t, "kind": "normal", "summary": "内部%s" % t,
+                  "public_text": txt} for t, txt in negative])
+    # 每时段一条：要发满 6 条需依次跑 6 次
+    for _ in range(len(negative)):
+        action, added, updated, skipped = sc.sync_daily(page8, "2026-09-19", st8)
+    check("正常文案全部安全发布、无误报",
+          len(ids(page8)) == len(negative), "%d/%d" % (len(ids(page8)), len(negative)))
+    check("负向样例没有任何一条被拦", skipped == [], str(skipped))
+
+    # 单独确认版本号与裸 IP 写法不被误判（与额度无关，直接用扫描函数）
+    for txt in ("版本 1.2.3.4 发布", "更新到 1.2.3.4", "【好耶】今天真不错"):
+        ok, why = sc.scan_public_text(txt)
+        check("不误伤：%s" % txt, ok, why)
+
     shutil.rmtree(base, ignore_errors=True)
     print()
     print("通过 %d 项，失败 %d 项" % (PASS, FAIL))

@@ -152,6 +152,53 @@ _SCAN_DROP_CHARS = (
 # 保留的空白与换行（不当作控制字符删除）
 _SCAN_KEEP_WS = "\t\n\r"
 
+# 通用类型检测规则（只含通用模式，不含任何真实姓名/单位/地址/行程/样本）。
+# 顺序即优先级；命中的 reason 只给类别，不回显原文。
+_TYPE_RULES = (
+    # 邮箱
+    ("email", re.compile(
+        r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
+    # 手机号（中国大陆 11 位，1 开头，第二位 3-9）
+    ("phone", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
+    # 带分隔的固话/座机（区号-号码，或号码带连字符）
+    ("phone", re.compile(r"(?<!\d)0\d{2,3}-\d{7,8}(?!\d)")),
+    # 凭据格式：常见密钥前缀
+    ("credential", re.compile(
+        r"(?i)\b(?:sk|pk|ghp|gho|ghu|ghs|github_pat|AKIA|ASIA|xox[baprs])"
+        r"[_\-][A-Za-z0-9_\-]{12,}")),
+    # 凭据格式：Bearer / token / key 等键值，或 Bearer 后跟长串
+    ("credential", re.compile(
+        r"(?i)\bbearer\s+[A-Za-z0-9._\-]{12,}")),
+    ("credential", re.compile(
+        r"(?i)\b(?:token|api[_\-]?key|secret|password|passwd|pwd)"
+        r"\s*[:=]\s*\S{6,}")),
+    # 本机绝对路径（家目录 / 系统目录）
+    ("local-path", re.compile(
+        r"(?:/home/[A-Za-z0-9._\-]+|/Users/[A-Za-z0-9._\-]+|/root"
+        r"|[A-Za-z]:\\Users\\[A-Za-z0-9._\-]+)")),
+    # IPv4：只在**有网络语境**时拦，避免把裸写的版本号 1.2.3.4
+    # 一类正常文案误判（用户要求控制误报）。要求前面出现
+    # IP/地址/服务器/端口/host 等提示词，或值出现在 URL 中。
+    ("ip-address", re.compile(
+        r"(?i)(?:ip|地址|服务器|主机|端口|host|server|address)\s*[:：=\s]\s*"
+        r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)"
+        r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)){3}"
+        r"(?![A-Za-z0-9.])")),
+    ("ip-address", re.compile(
+        r"(?<![A-Za-z0-9.])"
+        r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)"
+        r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)){3}"
+        r"(?:(?::\d{1,5})|(?:/\d{1,2}))(?![A-Za-z0-9.])")),
+)
+
+# 已定义的内部标记模式（**不粗暴拦截所有【……】**，只认这些前缀），
+# 避免误伤「【今日推荐】」这类正常括号文案。
+_INTERNAL_MARKER_RE = re.compile(
+    r"【\s*(?:内部|私人|私密|仅内部|勿公开|请勿公开|do\s*not\s*publish"
+    r"|internal|private)\s*[^】]{0,40}】",
+    re.IGNORECASE,
+)
+
 
 def normalize_for_scan(text):
     """生成**只用于禁词匹配**的规范化副本。
@@ -185,12 +232,17 @@ def scan_public_text(text):
     匹配前对**副本**做 NFKC 规范化并去掉零宽/控制字符（见
     normalize_for_scan），因此全角或插入零宽的相同写法同样会被拦下；
     发布正文仍保留 public_text 原文，不做任何改写。
-    返回的 reason 只给类别（blocked / no-blocklist / ...），不回显命中内容。
+    返回的 reason 只给类别（blocked / email / phone / ... / no-blocklist），
+    **不回显命中的原文、真实禁词或位置**。
 
-    范围说明（不要扩大解读）：本函数只做「规范化后的禁词子串匹配」，
-    当前仅被日常动态条目调用（daily_entries_for -> sync_daily）；
-    故事归档路径不经过本函数。类型检测（邮箱/电话/内部标记等）
-    与更完整的通用扫描器**未接入**，不在本次覆盖范围内。
+    两层检测：
+      1. 本机禁词子串（真实人名/单位/地址/行程/私人词，只在本机词表）；
+      2. 通用类型规则 _TYPE_RULES + 内部标记模式 _INTERNAL_MARKER_RE
+         —— 邮箱、手机号、凭据、本机绝对路径、IP。这些是通用模式，
+         不含任何真实样本，可以公开。
+
+    范围说明：当前仅被日常动态条目调用（daily_entries_for -> sync_daily）；
+    故事归档路径不经过本函数。
     """
     path = os.environ.get("SATORU_BLOCKLIST") or BLOCKLIST_FILE
     if not os.path.isfile(path):
@@ -209,10 +261,21 @@ def scan_public_text(text):
             terms.append(n)
     if not terms:
         return False, "blocklist-empty"
-    low = normalize_for_scan(text).lower()
+
+    # 所有检测都跑在规范化副本上；发布正文始终是 public_text 原文。
+    probe = normalize_for_scan(text)
+
     for term in terms:
-        if term.lower() in low:
+        if term.lower() in probe.lower():
             return False, "blocked"
+
+    for reason, rx in _TYPE_RULES:
+        if rx.search(probe):
+            return False, reason
+
+    if _INTERNAL_MARKER_RE.search(probe):
+        return False, "internal-marker"
+
     return True, "ok"
 
 
