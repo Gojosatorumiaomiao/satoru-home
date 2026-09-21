@@ -181,6 +181,12 @@ _TYPE_RULES = (
     ("local-path", re.compile(
         r"(?:/home/[A-Za-z0-9._\-]+|/Users/[A-Za-z0-9._\-]+|/root"
         r"|[A-Za-z]:\\Users\\[A-Za-z0-9._\-]+)")),
+    # WSL 下访问 Windows 侧家目录的写法：/mnt/<盘符>/Users/<用户>/…
+    # 说明：规范写法 /mnt/c/Users/<name> 其实已被上一条的 /Users/<name>
+    # 子串命中；真正漏掉的是大小写变体（Windows 文件系统不区分大小写，
+    # 如 /mnt/c/users/<name>）。本规则显式、且忽略大小写。
+    ("local-path", re.compile(
+        r"/mnt/[A-Za-z]/Users/[A-Za-z0-9._\-]+", re.IGNORECASE)),
     # IPv4：只在**有网络语境**时拦，避免把裸写的版本号 1.2.3.4
     # 一类正常文案误判（用户要求控制误报）。要求前面出现
     # IP/地址/服务器/端口/host 等提示词，或值出现在 URL 中。

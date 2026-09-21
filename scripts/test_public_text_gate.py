@@ -212,6 +212,11 @@ def run():
         ("06:00", "文件在 /home/hyr/.openclaw/workspace", "local-path"),
         ("07:00", "服务器 192.168.1.100 上", "ip-address"),
         ("08:00", "【内部】这段不要公开", "internal-marker"),
+        # WSL 下访问 Windows 侧家目录的写法（虚构用户名 demo/Demo）
+        ("09:00", "备份在 /mnt/c/Users/demo/Documents 里", "local-path"),
+        ("10:00", "路径 /mnt/d/Users/Demo/notes.txt", "local-path"),
+        ("11:00", "路径 /mnt/c/users/demo/Desktop", "local-path"),
+        ("12:00", "路径 /mnt/C/USERS/Demo", "local-path"),
     ]
     st7 = state([{"time": t, "kind": "normal", "summary": "内部%s" % t,
                   "public_text": txt} for t, txt, _ in positive])
@@ -250,6 +255,13 @@ def run():
     for txt in ("版本 1.2.3.4 发布", "更新到 1.2.3.4", "【好耶】今天真不错"):
         ok, why = sc.scan_public_text(txt)
         check("不误伤：%s" % txt, ok, why)
+
+    # WSL 规则的负例：只有 /mnt/<盘符>/ 但没有 Users/<用户>/ 段的路径不算
+    # 家目录，不应被当作本机路径拦下（控制误报）。
+    for txt in ("/mnt/c/Program Files", "/mnt/data/logs", "/mnt/c/Users",
+                "/mnt/c/Users/"):
+        ok, why = sc.scan_public_text(txt)
+        check("WSL 不误伤：%s" % txt, ok, why)
 
     shutil.rmtree(base, ignore_errors=True)
     print()
