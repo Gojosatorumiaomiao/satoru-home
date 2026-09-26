@@ -272,6 +272,19 @@ p {
   max-width: 68ch;
 }
 
+/* 正文小节标题（归档里的 "## 标题"）：比故事标题 <h3> 低一级，
+   字号与正文一致，靠字重和留白分层 */
+.story h4,
+.story h5,
+.story h6 {
+  font-size: 1rem;
+  margin: 26px 0 12px;
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  max-width: 68ch;
+}
+
 .muted {
   color: var(--ash);
   font-size: 0.9rem;
