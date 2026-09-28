@@ -188,6 +188,32 @@ def write_story_archive(date, title, paras, filename=None):
     return p, "written", None
 
 
+# 归档正文里的 Markdown 标题行，如 "## 那两笔账"。
+# 归档首行 "# 日期 标题" 由 render_story_list() 单独处理并渲染成 <h3>，
+# 所以正文标题一律降级到 <h4>–<h6>，不与故事标题同级。
+STORY_HEAD_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+
+
+def render_story_block(p):
+    """把归档正文的一段渲染成 HTML 元素（返回逐行列表，缩进由调用方加）。
+
+    Markdown 标题行输出语义标题，其余照旧成段。改前 "## xxx" 会被原样
+    输出成 <p>## xxx</p>，读者直接看到标记本身，也丢掉章节层级。
+    等级映射：## -> <h4>（故事标题是 <h3>），### -> <h5>，更深的 -> <h6>，
+    单个 # 按 <h4> 处理。
+    """
+    lines = p.split("\n")
+    m = STORY_HEAD_RE.match(lines[0].strip())
+    if not m:
+        return ["<p>%s</p>" % html_escape(p)]
+    level = min(max(len(m.group(1)) + 2, 4), 6)
+    out = ["<h%d>%s</h%d>" % (level, html_escape(m.group(2).strip()), level)]
+    tail = "\n".join(lines[1:]).strip()
+    if tail:
+        out.append("<p>%s</p>" % html_escape(tail))
+    return out
+
+
 def render_story_list():
     """扫描 stories/ 下全部归档，按日期（同日按序号）倒序渲染。
 
@@ -215,18 +241,23 @@ def render_story_list():
         paras = [p.strip() for p in "\n".join(lines[1:]).split("\n\n") if p.strip()]
         lead = paras[0] if paras else ""
         rest = paras[1:]
+        # 首段与展开区共用同一套段落渲染：Markdown 标题行 -> 语义标题
+        lead_html = "\n        ".join(render_story_block(lead)) if lead else ""
         more = ""
         if rest:
+            inner = []
+            for x in rest:
+                inner += render_story_block(x)
             more = "\n        <details>\n          <summary>继续读</summary>\n" + \
-                   "\n".join("          <p>%s</p>" % html_escape(x) for x in rest) + \
+                   "\n".join("          " + ln for ln in inner) + \
                    "\n        </details>"
         blocks.append(
             '      <article class="story" id="story-%s">\n'
             '        <div class="story-meta">%s</div>\n'
             '        <h3>%s</h3>\n'
-            '        <p>%s</p>%s\n'
+            '        %s%s\n'
             '        <p class="muted"><a class="story-link" href="stories/%s">全文</a></p>\n'
-            '      </article>' % (f[:-3], date, html_escape(title), html_escape(lead), more, f)
+            '      </article>' % (f[:-3], date, html_escape(title), lead_html, more, f)
         )
     return "\n\n".join(blocks)
 
@@ -438,16 +469,18 @@ def render_latest_story():
     title = strip_date_prefix(re.sub(r"^#\s*", "", lines[0] if lines else "").strip())
     paras = [p.strip() for p in "\n".join(lines[1:]).split("\n\n") if p.strip()]
     lead = paras[0] if paras else ""
+    # 与故事页同一套段落渲染，避免首页摘要漏出 Markdown 标记
+    lead_html = "\n      ".join(render_story_block(lead)) if lead else ""
 
     return (
         '    <article class="story" id="latest-story">\n'
         '      <div class="story-meta">%s</div>\n'
         '      <h3>%s</h3>\n'
-        '      <p>%s</p>\n'
+        '      %s\n'
         '      <p class="muted">'
         '<a class="story-link" href="stories.html#story-%s">在故事页读全文</a>'
         '</p>\n'
-        '    </article>' % (date, html_escape(title), html_escape(lead), f[:-3])
+        '    </article>' % (date, html_escape(title), lead_html, f[:-3])
     )
 
 

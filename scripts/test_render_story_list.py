@@ -63,6 +63,13 @@ CASES = [
 ]
 
 
+HEADING_DATE = "2026-01-04"
+HEADING_TITLE = "标题行样例"
+HEADING_LEAD = "标题行之前的正文。"
+HEADING_TEXT = "那两笔账"
+HEADING_TAIL = "标题行之后的正文。"
+
+
 def write_sample(root, date, title, paras):
     path = os.path.join(root, date + ".md")
     with open(path, "w", encoding="utf-8") as fh:
@@ -92,6 +99,9 @@ def main():
         mod.OUT_STORIES = tmp
         for date, title, paras in CASES:
             write_sample(tmp, date, title, paras)
+        # 第四种样例：正文含 Markdown 标题行（Issue #3 P2）
+        write_sample(tmp, HEADING_DATE, HEADING_TITLE,
+                     [HEADING_LEAD, "## " + HEADING_TEXT, HEADING_TAIL])
         rendered = mod.render_story_list()
         got = {t: (lead, rest) for t, lead, rest in parse_articles(rendered)}
 
@@ -119,6 +129,33 @@ def main():
             joined = lead + "".join(rest)
             if len(paras) > 1 and lead and lead in "".join(rest):
                 failures.append("%s：首段在展开正文中重复出现" % title)
+
+        # 额外：Markdown 标题行必须变成语义标题，页面不能残留 "## "
+        hblock = [b for b in re.findall(r'<article class="story".*?</article>', rendered, re.S)
+                  if 'id="story-%s"' % HEADING_DATE in b]
+        if not hblock:
+            failures.append("标题行样例：渲染结果里找不到该篇")
+            print("[FAIL] %s 日期=%s" % (HEADING_TITLE, HEADING_DATE))
+        else:
+            block = hblock[0]
+            detail = re.search(r"<details>.*?</details>", block, re.S)
+            inner = detail.group(0) if detail else ""
+            status = "OK"
+            if "##" in rendered:
+                status = "FAIL"
+                failures.append("标题行样例：页面仍出现字面量 '##'")
+            if "<h4>%s</h4>" % HEADING_TEXT not in inner:
+                status = "FAIL"
+                failures.append("标题行样例：标题没有渲染成 <h4>%s</h4>" % HEADING_TEXT)
+            if HEADING_LEAD not in block:
+                status = "FAIL"
+                failures.append("标题行样例：首段丢失")
+            order = [inner.find(HEADING_TEXT), inner.find(HEADING_TAIL)]
+            if -1 in order or order[0] > order[1]:
+                status = "FAIL"
+                failures.append("标题行样例：标题与后文顺序不正确")
+            print("[%s] %s 日期=%s 原文段落=3 渲染段落=3" %
+                  (status, HEADING_TITLE, HEADING_DATE))
 
     if failures:
         print("\n测试失败：")
