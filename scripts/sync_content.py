@@ -248,7 +248,8 @@ def render_story_list():
             inner = []
             for x in rest:
                 inner += render_story_block(x)
-            more = "\n        <details>\n          <summary>继续读</summary>\n" + \
+            summary = '<summary aria-label="展开《' + html_escape(title) + '》全文">继续读</summary>'
+            more = "\n        <details>\n          " + summary + "\n" + \
                    "\n".join("          " + ln for ln in inner) + \
                    "\n        </details>"
         blocks.append(
