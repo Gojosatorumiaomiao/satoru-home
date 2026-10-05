@@ -157,6 +157,39 @@ def main():
             print("[%s] %s 日期=%s 原文段落=3 渲染段落=3" %
                   (status, HEADING_TITLE, HEADING_DATE))
 
+        # 额外：折叠控件的可访问名称必须包含所属篇名（Issue #3 P1 可访问性）。
+        # 只靠一次性浏览器计数不够，未来新增故事时这条断言会先失败。
+        aria_names = []
+        aria_checked = 0
+        for block in re.findall(r'<article class="story".*?</article>', rendered, re.S):
+            h3 = re.search(r"<h3>(.*?)</h3>", block, re.S)
+            title = html.unescape(h3.group(1)) if h3 else ""
+            msum = re.search(r"<summary([^>]*)>(.*?)</summary>", block, re.S)
+            if not msum:
+                continue
+            attrs, visible = msum.group(1), msum.group(2)
+            label = re.search(r'aria-label="([^"]*)"', attrs)
+            got_label = label.group(1) if label else None
+            expected = "展开《%s》全文" % title
+            aria_names.append(got_label)
+            if got_label != expected:
+                failures.append(
+                    "%s：折叠控件可访问名称不正确（%r，应为 %r）" %
+                    (title, got_label, expected))
+            if visible != "继续读":
+                failures.append(
+                    "%s：折叠控件可见文字应为「继续读」，实为 %r" % (title, visible))
+            aria_checked += 1
+        if aria_checked == 0:
+            failures.append("折叠控件：没有找到带展开区的 summary，无法检查可访问名称")
+        distinct = len(set(aria_names))
+        distinct_ok = distinct == len(aria_names) and aria_checked > 0
+        if not distinct_ok:
+            failures.append("折叠控件：可访问名称存在重复，读屏用户无法区分")
+        print("[%s] 折叠控件可访问名称：检查 %d 个，互不相同 %s" %
+              ("OK" if aria_checked and distinct_ok else "FAIL",
+               aria_checked, distinct_ok))
+
     if failures:
         print("\n测试失败：")
         for f in failures:
