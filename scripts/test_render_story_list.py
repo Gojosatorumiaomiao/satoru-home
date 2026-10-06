@@ -190,6 +190,41 @@ def main():
               ("OK" if aria_checked and distinct_ok else "FAIL",
                aria_checked, distinct_ok))
 
+        # 额外：每篇「全文」链接的可访问名称必须包含所属篇名（Issue #3 P1 可访问性）。
+        # 与折叠控件同理：读屏用户按链接浏览时要能区分将打开哪一篇。
+        link_names = []
+        link_checked = 0
+        for block in re.findall(r'<article class="story".*?</article>', rendered, re.S):
+            h3 = re.search(r"<h3>(.*?)</h3>", block, re.S)
+            title = html.unescape(h3.group(1)) if h3 else ""
+            mlink = re.search(r'<a class="story-link"([^>]*)>(.*?)</a>', block, re.S)
+            if not mlink:
+                continue
+            attrs, visible = mlink.group(1), mlink.group(2)
+            label = re.search(r'aria-label="([^"]*)"', attrs)
+            got_label = label.group(1) if label else None
+            expected = "阅读《%s》全文" % title
+            link_names.append(got_label)
+            if got_label != expected:
+                failures.append(
+                    "%s：「全文」链接可访问名称不正确（%r，应为 %r）" %
+                    (title, got_label, expected))
+            if visible != "全文":
+                failures.append(
+                    "%s：「全文」链接可见文字应为「全文」，实为 %r" % (title, visible))
+            if 'href="stories/' not in attrs:
+                failures.append("%s：「全文」链接地址不像归档路径" % title)
+            link_checked += 1
+        if link_checked == 0:
+            failures.append("「全文」链接：没有找到 story-link，无法检查可访问名称")
+        link_distinct = len(set(link_names))
+        link_distinct_ok = link_distinct == len(link_names) and link_checked > 0
+        if not link_distinct_ok:
+            failures.append("「全文」链接：可访问名称存在重复，读屏用户无法区分")
+        print("[%s] 「全文」链接可访问名称：检查 %d 个，互不相同 %s" %
+              ("OK" if link_checked and link_distinct_ok else "FAIL",
+               link_checked, link_distinct_ok))
+
     if failures:
         print("\n测试失败：")
         for f in failures:

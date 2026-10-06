@@ -257,8 +257,9 @@ def render_story_list():
             '        <div class="story-meta">%s</div>\n'
             '        <h3>%s</h3>\n'
             '        %s%s\n'
-            '        <p class="muted"><a class="story-link" href="stories/%s">全文</a></p>\n'
-            '      </article>' % (f[:-3], date, html_escape(title), lead_html, more, f)
+            '        <p class="muted"><a class="story-link" aria-label="阅读《%s》全文" href="stories/%s">全文</a></p>\n'
+            '      </article>' % (f[:-3], date, html_escape(title), lead_html, more,
+                                   html_escape(title), f)
         )
     return "\n\n".join(blocks)
 
