@@ -19,6 +19,9 @@ tree 完全相同，是一个**空提交**，只制造历史噪声，并可能�
    （本机 fetch/push 走 https 会超时，远端默认不稳）。
 3. **提交只覆盖白名单**：`git commit -m <msg> -- <白名单>`，工作区其他未跟踪文件或
    无关改动不会进入本次发布提交。
+4. **dry-run 只读**：`--dry-run` 不调用 `git add`，只用 `git diff --name-only HEAD`
+   与 `git ls-files --others --exclude-standard` 探测白名单内改动，**不改动索引**
+   （按 Issue #3 复核 2026-10-09 午后 P0 修正）。
 
 用途
 ----
@@ -77,6 +80,24 @@ def changed_paths(cwd, paths):
     return sorted({ln.strip() for ln in diff.splitlines() if ln.strip()})
 
 
+def tracked_changes(cwd, paths):
+    """相对 HEAD 的已跟踪改动（含索引与工作树），供 dry-run 只读探测。"""
+    diff = _run(["git", "diff", "--name-only", "HEAD", "--"] + list(paths), cwd).stdout
+    return sorted({ln.strip() for ln in diff.splitlines() if ln.strip()})
+
+
+def untracked_files(cwd, paths):
+    """白名单内、不被 .gitignore 排除的未跟踪文件，供 dry-run 只读探测。"""
+    out = _run(["git", "ls-files", "--others", "--exclude-standard", "--"] + list(paths),
+               cwd).stdout
+    return sorted({ln.strip() for ln in out.splitlines() if ln.strip()})
+
+
+def pending_changes(cwd, paths):
+    """dry-run 只读探测：已跟踪改动 + 白名单内未跟踪文件，均相对 HEAD。"""
+    return sorted(set(tracked_changes(cwd, paths)) | set(untracked_files(cwd, paths)))
+
+
 def commit_is_empty(cwd, rev="HEAD"):
     """HEAD 的 tree 是否与父提交相同（即空提交）。无父提交时返回 False。"""
     parent = _run(["git", "rev-parse", "--verify", rev + "^"], cwd, check=False)
@@ -118,7 +139,16 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
         "dry_run": bool(dry_run),
     }
 
-    # 1. 只暂存白名单（含白名单内的新增文件与删除）。
+    if dry_run:
+        # 只读探测：不调用 git add，不改动索引（Issue #3 复核 2026-10-09 午后 P0）。
+        changed = pending_changes(cwd, paths)
+        if not changed:
+            return out, 0
+        out["changed_paths"] = changed
+        out["result"] = "would-publish"
+        return out, 0
+
+    # 1. 正式发布：只暂存白名单（含白名单内的新增文件与删除）。
     _run(["git", "add", "-A", "--"] + list(paths), cwd)
     # 2. 与当前 HEAD 比较暂存区；有差异才算本次发布。不依赖 origin/main。
     if _run(["git", "diff", "--cached", "--quiet", "HEAD", "--"] + list(paths),
@@ -126,9 +156,6 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
         return out, 0
 
     out["changed_paths"] = changed_paths(cwd, paths)
-    if dry_run:
-        out["result"] = "would-publish"
-        return out, 0
 
     if not message:
         raise PublishError("有改动待提交，但未提供 --message")

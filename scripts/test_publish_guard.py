@@ -12,6 +12,10 @@
      5. 判断只看白名单、只比 HEAD（不依赖 origin/main）；
      6. 工作区残留无关文件（secret.tmp / 其他改动）时，daily 发布只提交白名单，
         无关文件既不进入 commit，也不出现在 changed_paths。
+  C. Issue #3 复核 2026-10-09 午后 P0：
+     7. --dry-run 不改动索引：调用前后 `git diff --cached --name-status` 与
+        `git status --porcelain` 逐字节一致；原本未暂存的 daily.html 仍未暂存，
+        原本已暂存的无关文件仍已暂存；dry-run 能读到白名单内未跟踪文件但不暂存。
 
 用法：python3 scripts/test_publish_guard.py
 """
@@ -54,8 +58,20 @@ def commit_files(cwd):
     return sorted(git(cwd, "show", "--name-only", "--format=", "HEAD").splitlines())
 
 
+def git_raw(cwd, *args):
+    """不 strip 的 git 输出，用于逐字节比较索引/工作区状态。"""
+    p = subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError("git %s failed: %s" % (" ".join(args), p.stderr.strip()))
+    return p.stdout
+
+
 def status_porcelain(cwd):
-    return git(cwd, "status", "--porcelain")
+    return git_raw(cwd, "status", "--porcelain")
+
+
+def cached_name_status(cwd):
+    return git_raw(cwd, "diff", "--cached", "--name-status")
 
 
 def write(cwd, rel, text):
@@ -171,6 +187,63 @@ def test_unrelated_workspace_files():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_dry_run_does_not_touch_index():
+    """复核 2026-10-09 午后 P0：--dry-run 不得写索引。"""
+    d = new_repo()
+    try:
+        # 三类状态同时存在：
+        #  - daily.html 工作树改动、未暂存（dry-run 后必须仍未暂存）
+        #  - other.txt 已暂存（无关改动，dry-run 后必须仍已暂存）
+        #  - secret.tmp 未跟踪（dry-run 后必须仍未跟踪）
+        write(d, "daily.html", "<html>day1</html><p>dry-no-index</p>\n")
+        write(d, "other.txt", "staged unrelated change\n")
+        git(d, "add", "--", "other.txt")
+        write(d, "secret.tmp", "untracked\n")
+
+        cached0 = cached_name_status(d)
+        porcelain0 = status_porcelain(d)
+        check("前置：other.txt 已暂存", cached0.splitlines() == ["M\tother.txt"], cached0)
+        check("前置：daily.html 未暂存", " M daily.html" in porcelain0.splitlines(), porcelain0)
+
+        n0 = commit_count(d)
+        res, code = pg.publish("daily: dry", DAILY, d, dry_run=True)
+        check("dry-run result=would-publish", res["result"] == "would-publish", res)
+        check("dry-run 退出码 0", code == 0, code)
+        check("dry-run 不新增 commit", commit_count(d) == n0, commit_count(d))
+        check("dry-run 报告 daily.html", res["changed_paths"] == ["daily.html"], res["changed_paths"])
+        check("dry-run 前后 git diff --cached --name-status 逐字节一致",
+              cached_name_status(d) == cached0, (cached_name_status(d), cached0))
+        check("dry-run 前后 git status --porcelain 逐字节一致",
+              status_porcelain(d) == porcelain0, (status_porcelain(d), porcelain0))
+        check("dry-run 后 daily.html 仍未暂存",
+              " M daily.html" in status_porcelain(d).splitlines(), status_porcelain(d))
+        check("dry-run 后 other.txt 仍已暂存",
+              "M  other.txt" in status_porcelain(d).splitlines(), status_porcelain(d))
+        check("dry-run 后 secret.tmp 仍未跟踪",
+              "?? secret.tmp" in status_porcelain(d).splitlines(), status_porcelain(d))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_dry_run_detects_untracked_without_staging():
+    """复核 2026-10-09 午后 P0：dry-run 读到白名单内未跟踪文件但不暂存。"""
+    d = new_repo()
+    try:
+        write(d, "data/newlog.json", "{}\n")
+        porcelain0 = status_porcelain(d)
+        cached0 = cached_name_status(d)
+        res, code = pg.publish("x", DAILY + ["data/newlog.json"], d, dry_run=True)
+        check("dry-run 读到白名单内未跟踪文件 -> would-publish",
+              res["result"] == "would-publish", res)
+        check("dry-run 报告含未跟踪文件", res["changed_paths"] == ["data/newlog.json"],
+              res["changed_paths"])
+        check("dry-run 后未跟踪文件仍未被暂存",
+              status_porcelain(d) == porcelain0 and cached_name_status(d) == cached0,
+              status_porcelain(d))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_empty_commit_detection():
     d = new_repo()
     try:
@@ -209,6 +282,8 @@ def main():
     test_presets()
     test_daily_flow()
     test_unrelated_workspace_files()
+    test_dry_run_does_not_touch_index()
+    test_dry_run_detects_untracked_without_staging()
     test_empty_commit_detection()
     test_cli_requires_path()
     print()
