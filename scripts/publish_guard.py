@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""发布守卫：内容没有真实变化时不创建提交。
+"""发布守卫：白名单路径没有真实变化时不创建提交。
 
 背景
 ----
@@ -9,22 +9,34 @@ tree 完全相同，是一个**空提交**，只制造历史噪声，并可能�
 本仓库的 `scripts/sync_content.py` 本身不创建提交（它只写工作区文件并打印
 `"changed"` 报告），提交步骤由发布流程在 git 层直接完成，缺少「提交前的最终树比较」。
 
+设计（按 Issue #3 复核 2026-10-09 早间 P0 收窄）
+------------------------------------------------
+1. **白名单必填**：`--path` 至少一项；`--preset daily` / `--preset story` 提供固定白名单。
+   不再有「省略 paths 即扫描整棵工作树」的过宽默认。
+2. **只看白名单、只比 HEAD**：先 `git add -A -- <白名单>`，再用
+   `git diff --cached --quiet HEAD -- <白名单>` 判断暂存区相对当前 HEAD 是否有新 tree；
+   无差异直接 no-change。**不再依赖 `origin/main` 或任何远端引用**
+   （本机 fetch/push 走 https 会超时，远端默认不稳）。
+3. **提交只覆盖白名单**：`git commit -m <msg> -- <白名单>`，工作区其他未跟踪文件或
+   无关改动不会进入本次发布提交。
+
 用途
 ----
-把发布流程的**提交步骤**改为调用本脚本，一次调用完成：最终树比较 -> 提交 -> 可选推送。
+    python3 scripts/publish_guard.py --preset daily --message "daily: ..." --push
+    python3 scripts/publish_guard.py --message "story: ..." \
+        --path index.html --path stories.html --path stories/
 
-    python3 scripts/publish_guard.py --base origin/main \
-        --message "daily: ..." --path daily.html --push
-
-  - `--base`   比较基线，默认 `origin/main`（即「当前 main tree」）。
-  - `--path`   本次发布的路径，可重复；省略时比较全部已跟踪改动与未跟踪新文件。
-  - `--push`   提交后把当前分支推送到 `--remote`（默认 origin）。
+  - `--path`    本次发布的路径白名单，可重复；必填（或用 `--preset`）。
+  - `--preset`  `daily` = daily.html + data/daily-published.json；
+                `story` = index.html + stories.html + stories/ + daily.html
+                + data/daily-published.json（全量同步会同时更新动态，见 sync_content.py）。
+  - `--push`    提交后把当前分支推送到 `--remote`（默认 origin）。
   - `--dry-run` 只做比较与报告，不写索引、不提交、不推送。
 
 行为与退出码
 ------------
-  0  published           已提交（--dry-run 时为 would-publish）
-  0  no-change           工作区相对 base 在指定路径上无差异：不提交、不推送
+  0  published              已提交（--dry-run 时为 would-publish）
+  0  no-change              白名单暂存后与 HEAD 无差异：不提交、不推送
   3  empty-commit-prevented 提交后复核发现 tree 与父相同，已 git reset --soft 回退
   2  用法或 git 操作错误
 输出为单行 JSON，便于自动化按 `result` 判断。
@@ -34,6 +46,14 @@ import json
 import os
 import subprocess
 import sys
+
+PRESETS = {
+    # 增量发布日常动态时，sync_content.py 只写这两个文件。
+    "daily": ["daily.html", "data/daily-published.json"],
+    # 全量同步：故事归档 + 故事页 + 首页入口，并同时同步日常动态。
+    "story": ["index.html", "stories.html", "stories/",
+              "daily.html", "data/daily-published.json"],
+}
 
 
 class PublishError(Exception):
@@ -47,26 +67,14 @@ def _run(args, cwd, check=True):
     return p
 
 
-def resolve_commit(rev, cwd):
-    """把 rev（分支名/引用/短 SHA）解析成完整 commit SHA。"""
-    return _run(["git", "rev-parse", "--verify", rev + "^{commit}"], cwd).stdout.strip()
-
-
 def tree_of(rev, cwd):
     return _run(["git", "rev-parse", rev + "^{tree}"], cwd).stdout.strip()
 
 
-def changed_paths(base_commit, paths, cwd):
-    """相对 base 的改动：已跟踪文件的差异 + 未跟踪的新文件。
-
-    未给出 paths 时覆盖整棵树；给出时只统计这些路径。
-    """
-    spec = ["--"] + list(paths) if paths else []
-    diff = _run(["git", "diff", "--name-only", base_commit] + spec, cwd).stdout
-    others = _run(["git", "ls-files", "--others", "--exclude-standard"] + spec, cwd).stdout
-    out = sorted({ln.strip() for ln in diff.splitlines() if ln.strip()} |
-                 {ln.strip() for ln in others.splitlines() if ln.strip()})
-    return out
+def changed_paths(cwd, paths):
+    """相对 HEAD、已暂存且落在白名单内的改动路径。"""
+    diff = _run(["git", "diff", "--cached", "--name-only", "HEAD", "--"] + list(paths), cwd).stdout
+    return sorted({ln.strip() for ln in diff.splitlines() if ln.strip()})
 
 
 def commit_is_empty(cwd, rev="HEAD"):
@@ -74,21 +82,35 @@ def commit_is_empty(cwd, rev="HEAD"):
     parent = _run(["git", "rev-parse", "--verify", rev + "^"], cwd, check=False)
     if parent.returncode != 0:
         return False
-    return tree_of(rev, cwd) == _run(["git", "rev-parse", rev + "^^{tree}"], cwd).stdout.strip()
+    return tree_of(rev, cwd) == tree_of(rev + "^", cwd)
 
 
-def publish(message, base, paths, cwd, push=False, remote="origin", dry_run=False):
-    """最终树比较 + 提交 + 可选推送。返回 (result_dict, exit_code)。"""
-    base_commit = resolve_commit(base, cwd)
-    base_tree = tree_of(base_commit, cwd)
-    changed = changed_paths(base_commit, paths, cwd)
+def resolve_paths(preset, extra_paths):
+    """合并 preset 与显式 --path，去重并保持顺序。"""
+    merged = []
+    if preset:
+        merged.extend(PRESETS[preset])
+    merged.extend(extra_paths or [])
+    seen = set()
+    out = []
+    for p in merged:
+        p = (p or "").strip()
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
+    """白名单暂存 -> 暂存区与 HEAD 比较 -> 提交 -> 可选推送。返回 (result_dict, exit_code)。"""
+    paths = [p for p in (paths or []) if p]
+    if not paths:
+        raise PublishError("白名单必填：请给出 --path，或使用 --preset daily/story")
 
     out = {
         "result": "no-change",
-        "base": base,
-        "base_commit": base_commit,
-        "base_tree": base_tree,
-        "changed_paths": changed,
+        "paths": list(paths),
+        "changed_paths": [],
         "commit": None,
         "commit_tree": None,
         "parent_tree": None,
@@ -96,10 +118,14 @@ def publish(message, base, paths, cwd, push=False, remote="origin", dry_run=Fals
         "dry_run": bool(dry_run),
     }
 
-    if not changed:
-        # 新 tree 与当前 base tree 相同：报告 no-change，不创建 commit、不推进 ref。
+    # 1. 只暂存白名单（含白名单内的新增文件与删除）。
+    _run(["git", "add", "-A", "--"] + list(paths), cwd)
+    # 2. 与当前 HEAD 比较暂存区；有差异才算本次发布。不依赖 origin/main。
+    if _run(["git", "diff", "--cached", "--quiet", "HEAD", "--"] + list(paths),
+            cwd, check=False).returncode == 0:
         return out, 0
 
+    out["changed_paths"] = changed_paths(cwd, paths)
     if dry_run:
         out["result"] = "would-publish"
         return out, 0
@@ -107,18 +133,11 @@ def publish(message, base, paths, cwd, push=False, remote="origin", dry_run=Fals
     if not message:
         raise PublishError("有改动待提交，但未提供 --message")
 
-    add = ["git", "add", "-A"] + (["--"] + list(paths) if paths else [])
-    _run(add, cwd)
-    if _run(["git", "diff", "--cached", "--quiet"], cwd, check=False).returncode == 0:
-        # 索引里没有实际变化（例如只删了未跟踪文件）：同样按 no-change 处理。
-        out["changed_paths"] = []
-        return out, 0
-
-    _run(["git", "commit", "-m", message], cwd)
-    head = _run(["git", "rev-parse", "HEAD"], cwd).stdout.strip()
-    out["commit"] = head
+    # 3. 提交只覆盖白名单：其他暂存内容不进入本次发布提交。
+    _run(["git", "commit", "-m", message, "--"] + list(paths), cwd)
+    out["commit"] = _run(["git", "rev-parse", "HEAD"], cwd).stdout.strip()
     out["commit_tree"] = tree_of("HEAD", cwd)
-    parent = _run(["git", "rev-parse", "HEAD^"], cwd, check=False)
+    parent = _run(["git", "rev-parse", "--verify", "HEAD^"], cwd, check=False)
     if parent.returncode == 0:
         out["parent_tree"] = tree_of("HEAD^", cwd)
 
@@ -127,6 +146,7 @@ def publish(message, base, paths, cwd, push=False, remote="origin", dry_run=Fals
         _run(["git", "reset", "--soft", "HEAD^"], cwd)
         out["result"] = "empty-commit-prevented"
         out["commit"] = None
+        out["commit_tree"] = None
         return out, 3
 
     out["result"] = "published"
@@ -138,18 +158,23 @@ def publish(message, base, paths, cwd, push=False, remote="origin", dry_run=Fals
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="发布守卫：无变化时不创建提交")
-    ap.add_argument("--base", default="origin/main")
+    ap = argparse.ArgumentParser(description="发布守卫：白名单无变化时不创建提交")
+    ap.add_argument("--preset", choices=sorted(PRESETS), default=None,
+                    help="固定白名单：daily 或 story")
+    ap.add_argument("--path", action="append", default=[],
+                    help="白名单路径，可重复；与 --preset 合并")
     ap.add_argument("--message", default=None)
-    ap.add_argument("--path", action="append", default=[])
     ap.add_argument("--remote", default="origin")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--cwd", default=os.getcwd())
     args = ap.parse_args(argv)
 
+    paths = resolve_paths(args.preset, args.path)
+    if not paths:
+        ap.error("白名单必填：请给出 --path，或使用 --preset daily/story")
     try:
-        result, code = publish(args.message, args.base, args.path, args.cwd,
+        result, code = publish(args.message, paths, args.cwd,
                               push=args.push, remote=args.remote, dry_run=args.dry_run)
     except PublishError as e:
         print(json.dumps({"result": "error", "error": str(e)}, ensure_ascii=False))
