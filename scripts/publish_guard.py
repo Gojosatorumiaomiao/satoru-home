@@ -22,6 +22,14 @@ tree 完全相同，是一个**空提交**，只制造历史噪声，并可能�
 4. **dry-run 只读**：`--dry-run` 不调用 `git add`，只用 `git diff --name-only HEAD`
    与 `git ls-files --others --exclude-standard` 探测白名单内改动，**不改动索引**
    （按 Issue #3 复核 2026-10-09 午后 P0 修正）。
+5. **「已提交、推送未确认」是独立状态**：正式路径先建 commit 再 `git push`，若推送失败，
+   commit 仍留在 HEAD；绝不能让它落进后续的普通 `no-change` 而被永久滞留在本地。因此：
+   - 推送失败 -> 保留 commit，把 `{commit, branch, remote}` 记入 `.git/publish_guard_pending.json`，
+     返回 `push-pending`（含 commit SHA）、退出码 4；**不回退、不重复造 commit**；
+   - 下次运行时，**在判断工作区 no-change 之前**先读取该状态并补推；补推成功 ->
+     `push-pending-resolved`，清理状态；补推仍失败 -> 继续返回 `push-pending`；
+   - 记录中的提交已不在当前分支历史（如被 reset）时，清理该状态并继续。
+   （按 Issue #3 复核 2026-10-09 夜间 P0 修正。）
 
 用途
 ----
@@ -38,11 +46,14 @@ tree 完全相同，是一个**空提交**，只制造历史噪声，并可能�
 
 行为与退出码
 ------------
-  0  published              已提交（--dry-run 时为 would-publish）
-  0  no-change              白名单暂存后与 HEAD 无差异：不提交、不推送
-  3  empty-commit-prevented 提交后复核发现 tree 与父相同，已 git reset --soft 回退
+  0  published               已提交（--dry-run 时为 would-publish）
+  0  no-change               白名单暂存后与 HEAD 无差异：不提交、不推送
+  0  push-pending-resolved   上一轮遗留的未推送提交已补推成功（本轮未新建提交）
+  3  empty-commit-prevented  提交后复核发现 tree 与父相同，已 git reset --soft 回退
+  4  push-pending            已创建提交但推送未确认（含 commit SHA），下次运行会先重试推送
   2  用法或 git 操作错误
-输出为单行 JSON，便于自动化按 `result` 判断。
+输出为单行 JSON，便于自动化按 `result` 判断；推送失败时另带 `push_error`，
+与「未创建提交」的错误（result=error）在字段上区分开。
 """
 import argparse
 import json
@@ -57,6 +68,10 @@ PRESETS = {
     "story": ["index.html", "stories.html", "stories/",
               "daily.html", "data/daily-published.json"],
 }
+
+
+# 退出码：已创建提交、但推送未确认（见模块文档 5）。
+PENDING_EXIT = 4
 
 
 class PublishError(Exception):
@@ -98,6 +113,53 @@ def pending_changes(cwd, paths):
     return sorted(set(tracked_changes(cwd, paths)) | set(untracked_files(cwd, paths)))
 
 
+def head_rev(cwd):
+    return _run(["git", "rev-parse", "HEAD"], cwd).stdout.strip()
+
+
+def current_branch(cwd):
+    return _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
+
+
+def is_ancestor(cwd, rev, ref):
+    """rev 是否为 ref 的祖先（含 rev == ref）。"""
+    return _run(["git", "merge-base", "--is-ancestor", rev, ref],
+                cwd, check=False).returncode == 0
+
+
+def _push(cwd, remote, branch):
+    """把当前 HEAD 推送到远端同名分支；失败抛 PublishError。"""
+    _run(["git", "push", remote, "HEAD:refs/heads/" + branch], cwd)
+
+
+def state_path(cwd):
+    """待推送状态文件路径（放在 .git 内，不进入版本历史）。"""
+    git_dir = _run(["git", "rev-parse", "--absolute-git-dir"], cwd).stdout.strip()
+    return os.path.join(git_dir, "publish_guard_pending.json")
+
+
+def load_pending(cwd):
+    p = state_path(cwd)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def save_pending(cwd, data):
+    with open(state_path(cwd), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def clear_pending(cwd):
+    p = state_path(cwd)
+    if os.path.exists(p):
+        os.remove(p)
+
+
 def commit_is_empty(cwd, rev="HEAD"):
     """HEAD 的 tree 是否与父提交相同（即空提交）。无父提交时返回 False。"""
     parent = _run(["git", "rev-parse", "--verify", rev + "^"], cwd, check=False)
@@ -137,22 +199,64 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
         "parent_tree": None,
         "pushed": False,
         "dry_run": bool(dry_run),
+        "pending_push": False,
+        "pending_commit": None,
+        "note": None,
     }
 
     if dry_run:
-        # 只读探测：不调用 git add，不改动索引（Issue #3 复核 2026-10-09 午后 P0）。
+        # 只读探测：不调用 git add，不改动索引，也不重试推送
+        # （Issue #3 复核 2026-10-09 午后 P0）。
         changed = pending_changes(cwd, paths)
+        pend = load_pending(cwd)
+        if pend:
+            out["pending_push"] = True
+            out["pending_commit"] = pend.get("commit")
         if not changed:
             return out, 0
         out["changed_paths"] = changed
         out["result"] = "would-publish"
         return out, 0
 
+    # 0. 先处理上一轮「已创建提交、推送未确认」的遗留状态
+    #    （Issue #3 复核 2026-10-09 夜间 P0）：不能把它当作普通 no-change，
+    #    要在比较工作区之前先重试推送。
+    pending_resolved = False
+    pend = load_pending(cwd)
+    if pend:
+        commit = pend.get("commit")
+        if commit and is_ancestor(cwd, commit, head_rev(cwd)):
+            out["pending_commit"] = commit
+            out["commit"] = commit
+            if not push:
+                out["result"] = "push-pending"
+                out["pending_push"] = True
+                out["note"] = "存在已创建但未确认推送的提交；未提供 --push，本轮不重试推送"
+                return out, PENDING_EXIT
+            branch = pend.get("branch") or current_branch(cwd)
+            try:
+                _push(cwd, pend.get("remote") or remote, branch)
+            except PublishError as e:
+                out["result"] = "push-pending"
+                out["pending_push"] = True
+                out["push_error"] = str(e)
+                out["note"] = "上一轮已创建的提交仍未推送成功，保留待推送状态"
+                return out, PENDING_EXIT
+            clear_pending(cwd)
+            pending_resolved = True
+        else:
+            # 记录的提交已不在当前分支历史（如被 reset），清掉状态继续。
+            clear_pending(cwd)
+            out["note"] = "已清理失效的待推送记录（其提交不在当前分支历史中）"
+
     # 1. 正式发布：只暂存白名单（含白名单内的新增文件与删除）。
     _run(["git", "add", "-A", "--"] + list(paths), cwd)
     # 2. 与当前 HEAD 比较暂存区；有差异才算本次发布。不依赖 origin/main。
     if _run(["git", "diff", "--cached", "--quiet", "HEAD", "--"] + list(paths),
             cwd, check=False).returncode == 0:
+        if pending_resolved:
+            out["result"] = "push-pending-resolved"
+            out["pushed"] = True
         return out, 0
 
     out["changed_paths"] = changed_paths(cwd, paths)
@@ -178,8 +282,17 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
 
     out["result"] = "published"
     if push:
-        branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd).stdout.strip()
-        _run(["git", "push", remote, "HEAD:refs/heads/" + branch], cwd)
+        branch = current_branch(cwd)
+        try:
+            _push(cwd, remote, branch)
+        except PublishError as e:
+            # 提交已创建、推送未确认：保留 commit，记录待推送状态，
+            # 下一次运行先补推，绝不落进普通 no-change（Issue #3 复核 2026-10-09 夜间 P0）。
+            save_pending(cwd, {"commit": out["commit"], "branch": branch, "remote": remote})
+            out["result"] = "push-pending"
+            out["pending_push"] = True
+            out["push_error"] = str(e)
+            return out, PENDING_EXIT
         out["pushed"] = True
     return out, 0
 

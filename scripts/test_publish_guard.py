@@ -16,6 +16,11 @@
      7. --dry-run 不改动索引：调用前后 `git diff --cached --name-status` 与
         `git status --porcelain` 逐字节一致；原本未暂存的 daily.html 仍未暂存，
         原本已暂存的无关文件仍已暂存；dry-run 能读到白名单内未跟踪文件但不暂存。
+  D. Issue #3 复核 2026-10-09 夜间 P0（本地 bare remote，不依赖公网）：
+     8. 推送被远端拒绝 -> result=push-pending、退出码 4，已创建的 commit 保留并记录 SHA，
+        远端 tip 不前进；
+     9. 恢复远端后用同一输入重跑 -> 先补推、不落进 no-change，远端 tip 到达该 commit，
+        不产生第二个 commit，无关暂存内容不变；补推成功后状态被清理。
 
 用法：python3 scripts/test_publish_guard.py
 """
@@ -93,6 +98,28 @@ def new_repo():
     git(d, "add", "-A")
     git(d, "commit", "-q", "-m", "base")
     return d
+
+
+def new_work_repo_with_remote():
+    """工作仓库 + 本地 bare remote（基线已推送）。返回 (work, bare, branch)。"""
+    work = new_repo()
+    bare = tempfile.mkdtemp(prefix="publish-guard-remote-")
+    git(bare, "init", "--bare", "-q")
+    git(work, "remote", "add", "origin", bare)
+    branch = git(work, "rev-parse", "--abbrev-ref", "HEAD")
+    git(work, "push", "-q", "origin", "HEAD:refs/heads/" + branch)
+    return work, bare, branch
+
+
+def set_reject_hook(bare, reject):
+    """在 bare remote 上装/拆 pre-receive 钩子，用来制造推送拒绝。"""
+    hook = os.path.join(bare, "hooks", "pre-receive")
+    if reject:
+        with open(hook, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(hook, 0o755)
+    elif os.path.exists(hook):
+        os.remove(hook)
 
 
 def test_presets():
@@ -278,6 +305,71 @@ def test_cli_requires_path():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_push_pending_retry():
+    """复核 2026-10-09 夜间 P0：push 失败不丢状态，下次运行先补推（本地 bare remote）。"""
+    work, bare, branch = new_work_repo_with_remote()
+    try:
+        base_tip = git(bare, "rev-parse", "refs/heads/" + branch)
+        # 无关改动先暂存：验证重试不会破坏暂存区。
+        write(work, "other.txt", "staged unrelated change\n")
+        git(work, "add", "--", "other.txt")
+        cached_before = cached_name_status(work)
+
+        # 1) 远端拒绝推送：提交已创建、推送未确认。
+        set_reject_hook(bare, True)
+        write(work, "daily.html", "<html>day1</html><p>push-pending</p>\n")
+        n_before = commit_count(work)
+        res, code = pg.publish("daily: pending", DAILY, work, push=True)
+        check("push 被拒时 result=push-pending", res["result"] == "push-pending", res)
+        check("push 被拒时退出码 4", code == pg.PENDING_EXIT, code)
+        check("push 被拒时已创建提交并记录 SHA",
+              res["commit"] is not None and res["pending_push"] is True, res)
+        check("push 被拒时带 push_error 字段", bool(res.get("push_error")), res)
+        check("push 被拒时本地新增 1 个 commit", commit_count(work) == n_before + 1,
+              commit_count(work))
+        check("push 被拒时远端 tip 未前进",
+              git(bare, "rev-parse", "refs/heads/" + branch) == base_tip,
+              git(bare, "rev-parse", "refs/heads/" + branch))
+        pending_commit = res["commit"]
+        check("待推送状态已落盘", pg.load_pending(work) is not None, pg.load_pending(work))
+
+        # 1b) 有遗留言而未给 --push：仍报告 push-pending，远端不受影响。
+        res_np, code_np = pg.publish("daily: pending", DAILY, work, push=False)
+        check("未给 --push 时仍报告 push-pending",
+              res_np["result"] == "push-pending" and code_np == pg.PENDING_EXIT, res_np)
+        check("未给 --push 时不触碰远端",
+              git(bare, "rev-parse", "refs/heads/" + branch) == base_tip, base_tip)
+
+        # 1c) dry-run 在有待推送提交时仍只读、不推送。
+        res_dry, _ = pg.publish("daily: pending", DAILY, work, dry_run=True)
+        check("dry-run 读出待推送状态且不推送",
+              res_dry["pending_push"] is True
+              and git(bare, "rev-parse", "refs/heads/" + branch) == base_tip, res_dry)
+
+        # 2) 恢复远端、同一输入重跑：必须补推，而不是返回 no-change。
+        set_reject_hook(bare, False)
+        n_after = commit_count(work)
+        res2, code2 = pg.publish("daily: pending", DAILY, work, push=True)
+        check("重跑不再落进 no-change", res2["result"] != "no-change", res2)
+        check("重跑补推成功标记 pushed", res2["pushed"] is True, res2)
+        check("重跑不产生第二个 commit", commit_count(work) == n_after, commit_count(work))
+        check("远端 tip 已到达该提交",
+              git(bare, "rev-parse", "refs/heads/" + branch) == pending_commit,
+              (git(bare, "rev-parse", "refs/heads/" + branch), pending_commit))
+        check("重跑后待推送状态已清理", pg.load_pending(work) is None, pg.load_pending(work))
+        check("重跑保留无关暂存内容", cached_name_status(work) == cached_before,
+              (cached_name_status(work), cached_before))
+
+        # 3) 无遗留、无新改动：回到 no-change，不新增 commit。
+        n3 = commit_count(work)
+        res3, _ = pg.publish("daily: pending", DAILY, work, push=True)
+        check("清理后无变化回到 no-change", res3["result"] == "no-change", res3)
+        check("清理后不新增 commit", commit_count(work) == n3, commit_count(work))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
 def main():
     test_presets()
     test_daily_flow()
@@ -286,6 +378,7 @@ def main():
     test_dry_run_detects_untracked_without_staging()
     test_empty_commit_detection()
     test_cli_requires_path()
+    test_push_pending_retry()
     print()
     if FAILED:
         print("FAILED: %d 项 -> %s" % (len(FAILED), ", ".join(FAILED)))
