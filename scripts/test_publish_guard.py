@@ -21,6 +21,13 @@
         远端 tip 不前进；
      9. 恢复远端后用同一输入重跑 -> 先补推、不落进 no-change，远端 tip 到达该 commit，
         不产生第二个 commit，无关暂存内容不变；补推成功后状态被清理。
+  E. Issue #3 复核 2026-10-10 早间 P0（本地 bare remote，不依赖公网）：
+    10. 补推只推「记录中的提交」：本地再有后继提交 Q 时，远端 tip 也只到 P，不带 Q；
+    11. 切到另一条不含该提交的分支后重跑 -> result=push-pending-conflict、退出码 5，
+        不把该分支 HEAD 推到记录的目标分支，记录保留；
+    12. 记录的提交不在当前 HEAD 历史（本地 reset）时，不静默清理、不落进 no-change，
+        保留记录并返回明确冲突；
+    13. 若已确认该提交在目标远端，则清理记录、不报冲突。
 
 用法：python3 scripts/test_publish_guard.py
 """
@@ -370,6 +377,101 @@ def test_push_pending_retry():
         shutil.rmtree(bare, ignore_errors=True)
 
 
+def _pending_setup():
+    """工作仓库 + 本地 bare remote，制造一次 push 被拒的 pending。
+
+    返回 (work, bare, branch, pending_commit, base_tip)。
+    """
+    work, bare, branch = new_work_repo_with_remote()
+    base_tip = git(bare, "rev-parse", "refs/heads/" + branch)
+    set_reject_hook(bare, True)
+    write(work, "daily.html", "<html>day1</html><p>pending-x</p>\n")
+    res, code = pg.publish("daily: pending", DAILY, work, push=True)
+    if res["result"] != "push-pending" or code != pg.PENDING_EXIT:
+        raise RuntimeError("pending_setup 失败: %r %r" % (res, code))
+    return work, bare, branch, res["commit"], base_tip
+
+
+def test_pending_retry_targets_recorded_commit():
+    """复核 2026-10-10 早间 P0：补推只推记录的提交，不把后继提交 Q 一起推。"""
+    work, bare, branch, pending_commit, base_tip = _pending_setup()
+    try:
+        git(work, "commit", "-q", "--allow-empty", "-m", "successor Q")
+        q = git(work, "rev-parse", "HEAD")
+        check("前置：后继提交 Q 与 P 不同", q != pending_commit, (q, pending_commit))
+        set_reject_hook(bare, False)
+        res, code = pg.publish("daily: pending", DAILY, work, push=True)
+        tip = git(bare, "rev-parse", "refs/heads/" + branch)
+        check("重跑不再返回 no-change", res["result"] != "no-change", res)
+        check("补推后远端 tip 是记录的 P", tip == pending_commit, (tip, pending_commit))
+        check("补推未把后继 Q 推上去", tip != q, (tip, q))
+        check("重跑后待推送状态已清理", pg.load_pending(work) is None, pg.load_pending(work))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
+def test_pending_on_other_branch_not_pushed():
+    """复核 2026-10-10 早间 P0：切到另一条不含 P 的分支后重跑，不得把该分支 HEAD 推上去。"""
+    work, bare, branch, pending_commit, base_tip = _pending_setup()
+    try:
+        base_commit = git(work, "rev-parse", "HEAD~1")
+        git(work, "checkout", "-q", "-b", "other-branch", base_commit)
+        write(work, "other.txt", "other branch work\n")
+        git(work, "commit", "-q", "-am", "other branch commit")
+        other_head = git(work, "rev-parse", "HEAD")
+        set_reject_hook(bare, False)
+        res, code = pg.publish("daily: pending", DAILY, work, push=True)
+        tip = git(bare, "rev-parse", "refs/heads/" + branch)
+        check("切分支后返回 push-pending-conflict",
+              res["result"] == "push-pending-conflict", res)
+        check("切分支后退出码 5", code == pg.PUSH_CONFLICT_EXIT, code)
+        check("切分支后目标远端 tip 不变", tip == base_tip, (tip, base_tip))
+        check("切分支后未把该分支 HEAD 推上去", tip != other_head, (tip, other_head))
+        check("切分支后保留待推送记录", pg.load_pending(work) is not None, pg.load_pending(work))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
+def test_pending_conflict_keeps_state_after_reset():
+    """复核 2026-10-10 早间 P0：提交不在 HEAD 历史时不静默清理、不落进 no-change。"""
+    work, bare, branch, pending_commit, base_tip = _pending_setup()
+    try:
+        n_p = commit_count(work)
+        git(work, "reset", "--hard", "HEAD~1")
+        set_reject_hook(bare, False)
+        res, code = pg.publish("daily: pending", DAILY, work, push=True)
+        check("reset 后返回 push-pending-conflict",
+              res["result"] == "push-pending-conflict", res)
+        check("reset 后退出码 5", code == pg.PUSH_CONFLICT_EXIT, code)
+        check("reset 后不落进 no-change", res["result"] != "no-change", res)
+        check("reset 后不新增 commit", commit_count(work) == n_p - 1, commit_count(work))
+        check("reset 后保留待推送记录", pg.load_pending(work) is not None, pg.load_pending(work))
+        check("reset 后远端 tip 未前进",
+              git(bare, "rev-parse", "refs/heads/" + branch) == base_tip, base_tip)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
+def test_pending_conflict_resolves_when_already_on_remote():
+    """复核 2026-10-10 早间 P0：已确认提交在目标远端时，允许清理记录。"""
+    work, bare, branch, pending_commit, base_tip = _pending_setup()
+    try:
+        set_reject_hook(bare, False)
+        git(work, "push", "-q", "origin", pending_commit + ":refs/heads/" + branch)
+        git(work, "reset", "--hard", "HEAD~1")
+        res, code = pg.publish("daily: pending", DAILY, work, push=True)
+        check("已在远端时清理待推送记录", pg.load_pending(work) is None, pg.load_pending(work))
+        check("已在远端时不报冲突", res["result"] != "push-pending-conflict", res)
+        check("已在远端时远端 tip 仍是 P",
+              git(bare, "rev-parse", "refs/heads/" + branch) == pending_commit, pending_commit)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
 def main():
     test_presets()
     test_daily_flow()
@@ -379,6 +481,10 @@ def main():
     test_empty_commit_detection()
     test_cli_requires_path()
     test_push_pending_retry()
+    test_pending_retry_targets_recorded_commit()
+    test_pending_on_other_branch_not_pushed()
+    test_pending_conflict_keeps_state_after_reset()
+    test_pending_conflict_resolves_when_already_on_remote()
     print()
     if FAILED:
         print("FAILED: %d 项 -> %s" % (len(FAILED), ", ".join(FAILED)))

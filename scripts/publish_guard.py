@@ -28,8 +28,12 @@ tree 完全相同，是一个**空提交**，只制造历史噪声，并可能�
      返回 `push-pending`（含 commit SHA）、退出码 4；**不回退、不重复造 commit**；
    - 下次运行时，**在判断工作区 no-change 之前**先读取该状态并补推；补推成功 ->
      `push-pending-resolved`，清理状态；补推仍失败 -> 继续返回 `push-pending`；
-   - 记录中的提交已不在当前分支历史（如被 reset）时，清理该状态并继续。
-   （按 Issue #3 复核 2026-10-09 夜间 P0 修正。）
+   - 补推始终把「记录的那个提交」推到「记录的那个分支」（`<commit>:refs/heads/<branch>`），
+     **不使用当前 HEAD**：即使之后本地又出现后继提交或切到别的分支，也不会把多余内容推上去；
+   - 记录中的提交已不在当前分支历史（切分支 / detached HEAD / 本地 reset）时，**不静默清理**：
+     先用 `git ls-remote` 确认它是否已在目标远端分支，已确认才清理；否则返回
+     `push-pending-conflict`（退出码 5）要求人工处理。
+   （按 Issue #3 复核 2026-10-09 夜间 与 2026-10-10 早间 P0 修正。）
 
 用途
 ----
@@ -51,6 +55,7 @@ tree 完全相同，是一个**空提交**，只制造历史噪声，并可能�
   0  push-pending-resolved   上一轮遗留的未推送提交已补推成功（本轮未新建提交）
   3  empty-commit-prevented  提交后复核发现 tree 与父相同，已 git reset --soft 回退
   4  push-pending            已创建提交但推送未确认（含 commit SHA），下次运行会先重试推送
+  5  push-pending-conflict   待推送提交不在当前 HEAD 历史且无法确认已在目标远端，需人工处理
   2  用法或 git 操作错误
 输出为单行 JSON，便于自动化按 `result` 判断；推送失败时另带 `push_error`，
 与「未创建提交」的错误（result=error）在字段上区分开。
@@ -72,6 +77,8 @@ PRESETS = {
 
 # 退出码：已创建提交、但推送未确认（见模块文档 5）。
 PENDING_EXIT = 4
+# 退出码：待推送记录失效（提交不在当前 HEAD 历史且无法确认已在远端），需人工处理。
+PUSH_CONFLICT_EXIT = 5
 
 
 class PublishError(Exception):
@@ -127,9 +134,25 @@ def is_ancestor(cwd, rev, ref):
                 cwd, check=False).returncode == 0
 
 
-def _push(cwd, remote, branch):
-    """把当前 HEAD 推送到远端同名分支；失败抛 PublishError。"""
-    _run(["git", "push", remote, "HEAD:refs/heads/" + branch], cwd)
+def _push(cwd, remote, branch, source_rev="HEAD"):
+    """把 source_rev（默认当前 HEAD）推送到远端同名分支；失败抛 PublishError。
+
+    补推遗留提交时必须显式传入记录中的 commit，不能用当前 HEAD，
+    否则会把后继提交或其它分支内容一起推上去（Issue #3 复核 2026-10-10 早间 P0）。
+    """
+    _run(["git", "push", remote, source_rev + ":refs/heads/" + branch], cwd)
+
+
+def remote_branch_rev(cwd, remote, branch):
+    """远端分支当前 tip 的提交 SHA；分支不存在或查询失败时返回 None。"""
+    p = _run(["git", "ls-remote", "--heads", remote, "refs/heads/" + branch],
+             cwd, check=False)
+    if p.returncode != 0:
+        return None
+    lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    return lines[0].split()[0]
 
 
 def state_path(cwd):
@@ -225,17 +248,27 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
     pend = load_pending(cwd)
     if pend:
         commit = pend.get("commit")
-        if commit and is_ancestor(cwd, commit, head_rev(cwd)):
+        branch = pend.get("branch")
+        pending_remote = pend.get("remote") or remote
+        if commit:
             out["pending_commit"] = commit
             out["commit"] = commit
+        if not commit or not branch:
+            # 记录不完整：不静默丢弃，交人工处理。
+            out["result"] = "push-pending-conflict"
+            out["pending_push"] = True
+            out["note"] = "待推送记录不完整（缺 commit 或 branch），需人工处理"
+            return out, PUSH_CONFLICT_EXIT
+        if is_ancestor(cwd, commit, "HEAD"):
+            # 记录中的提交仍在当前 HEAD 历史：只补推它本身到记录的分支，
+            # 不使用当前 HEAD，避免带上后继提交或其它分支内容。
             if not push:
                 out["result"] = "push-pending"
                 out["pending_push"] = True
                 out["note"] = "存在已创建但未确认推送的提交；未提供 --push，本轮不重试推送"
                 return out, PENDING_EXIT
-            branch = pend.get("branch") or current_branch(cwd)
             try:
-                _push(cwd, pend.get("remote") or remote, branch)
+                _push(cwd, pending_remote, branch, source_rev=commit)
             except PublishError as e:
                 out["result"] = "push-pending"
                 out["pending_push"] = True
@@ -245,9 +278,19 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
             clear_pending(cwd)
             pending_resolved = True
         else:
-            # 记录的提交已不在当前分支历史（如被 reset），清掉状态继续。
-            clear_pending(cwd)
-            out["note"] = "已清理失效的待推送记录（其提交不在当前分支历史中）"
+            # 记录中的提交不在当前 HEAD 历史（切分支 / detached HEAD / 本地 reset）。
+            # 只有确认该提交已在目标远端分支时才清理；否则返回明确冲突，不静默继续。
+            remote_tip = remote_branch_rev(cwd, pending_remote, branch)
+            if remote_tip == commit:
+                clear_pending(cwd)
+                pending_resolved = True
+                out["note"] = "待推送记录中的提交已在目标远端分支，清理记录"
+            else:
+                out["result"] = "push-pending-conflict"
+                out["pending_push"] = True
+                out["note"] = ("待推送提交不在当前 HEAD 历史，且目标远端分支未指向该提交；"
+                               "保留记录，请人工处理")
+                return out, PUSH_CONFLICT_EXIT
 
     # 1. 正式发布：只暂存白名单（含白名单内的新增文件与删除）。
     _run(["git", "add", "-A", "--"] + list(paths), cwd)
