@@ -63,6 +63,13 @@ CASES = [
 ]
 
 
+HEADING_DATE = "2026-01-04"
+HEADING_TITLE = "标题行样例"
+HEADING_LEAD = "标题行之前的正文。"
+HEADING_TEXT = "那两笔账"
+HEADING_TAIL = "标题行之后的正文。"
+
+
 def write_sample(root, date, title, paras):
     path = os.path.join(root, date + ".md")
     with open(path, "w", encoding="utf-8") as fh:
@@ -92,6 +99,9 @@ def main():
         mod.OUT_STORIES = tmp
         for date, title, paras in CASES:
             write_sample(tmp, date, title, paras)
+        # 第四种样例：正文含 Markdown 标题行（Issue #3 P2）
+        write_sample(tmp, HEADING_DATE, HEADING_TITLE,
+                     [HEADING_LEAD, "## " + HEADING_TEXT, HEADING_TAIL])
         rendered = mod.render_story_list()
         got = {t: (lead, rest) for t, lead, rest in parse_articles(rendered)}
 
@@ -119,6 +129,101 @@ def main():
             joined = lead + "".join(rest)
             if len(paras) > 1 and lead and lead in "".join(rest):
                 failures.append("%s：首段在展开正文中重复出现" % title)
+
+        # 额外：Markdown 标题行必须变成语义标题，页面不能残留 "## "
+        hblock = [b for b in re.findall(r'<article class="story".*?</article>', rendered, re.S)
+                  if 'id="story-%s"' % HEADING_DATE in b]
+        if not hblock:
+            failures.append("标题行样例：渲染结果里找不到该篇")
+            print("[FAIL] %s 日期=%s" % (HEADING_TITLE, HEADING_DATE))
+        else:
+            block = hblock[0]
+            detail = re.search(r"<details>.*?</details>", block, re.S)
+            inner = detail.group(0) if detail else ""
+            status = "OK"
+            if "##" in rendered:
+                status = "FAIL"
+                failures.append("标题行样例：页面仍出现字面量 '##'")
+            if "<h4>%s</h4>" % HEADING_TEXT not in inner:
+                status = "FAIL"
+                failures.append("标题行样例：标题没有渲染成 <h4>%s</h4>" % HEADING_TEXT)
+            if HEADING_LEAD not in block:
+                status = "FAIL"
+                failures.append("标题行样例：首段丢失")
+            order = [inner.find(HEADING_TEXT), inner.find(HEADING_TAIL)]
+            if -1 in order or order[0] > order[1]:
+                status = "FAIL"
+                failures.append("标题行样例：标题与后文顺序不正确")
+            print("[%s] %s 日期=%s 原文段落=3 渲染段落=3" %
+                  (status, HEADING_TITLE, HEADING_DATE))
+
+        # 额外：折叠控件的可访问名称必须包含所属篇名（Issue #3 P1 可访问性）。
+        # 只靠一次性浏览器计数不够，未来新增故事时这条断言会先失败。
+        aria_names = []
+        aria_checked = 0
+        for block in re.findall(r'<article class="story".*?</article>', rendered, re.S):
+            h3 = re.search(r"<h3>(.*?)</h3>", block, re.S)
+            title = html.unescape(h3.group(1)) if h3 else ""
+            msum = re.search(r"<summary([^>]*)>(.*?)</summary>", block, re.S)
+            if not msum:
+                continue
+            attrs, visible = msum.group(1), msum.group(2)
+            label = re.search(r'aria-label="([^"]*)"', attrs)
+            got_label = label.group(1) if label else None
+            expected = "展开《%s》全文" % title
+            aria_names.append(got_label)
+            if got_label != expected:
+                failures.append(
+                    "%s：折叠控件可访问名称不正确（%r，应为 %r）" %
+                    (title, got_label, expected))
+            if visible != "继续读":
+                failures.append(
+                    "%s：折叠控件可见文字应为「继续读」，实为 %r" % (title, visible))
+            aria_checked += 1
+        if aria_checked == 0:
+            failures.append("折叠控件：没有找到带展开区的 summary，无法检查可访问名称")
+        distinct = len(set(aria_names))
+        distinct_ok = distinct == len(aria_names) and aria_checked > 0
+        if not distinct_ok:
+            failures.append("折叠控件：可访问名称存在重复，读屏用户无法区分")
+        print("[%s] 折叠控件可访问名称：检查 %d 个，互不相同 %s" %
+              ("OK" if aria_checked and distinct_ok else "FAIL",
+               aria_checked, distinct_ok))
+
+        # 额外：每篇「全文」链接的可访问名称必须包含所属篇名（Issue #3 P1 可访问性）。
+        # 与折叠控件同理：读屏用户按链接浏览时要能区分将打开哪一篇。
+        link_names = []
+        link_checked = 0
+        for block in re.findall(r'<article class="story".*?</article>', rendered, re.S):
+            h3 = re.search(r"<h3>(.*?)</h3>", block, re.S)
+            title = html.unescape(h3.group(1)) if h3 else ""
+            mlink = re.search(r'<a class="story-link"([^>]*)>(.*?)</a>', block, re.S)
+            if not mlink:
+                continue
+            attrs, visible = mlink.group(1), mlink.group(2)
+            label = re.search(r'aria-label="([^"]*)"', attrs)
+            got_label = label.group(1) if label else None
+            expected = "阅读《%s》全文" % title
+            link_names.append(got_label)
+            if got_label != expected:
+                failures.append(
+                    "%s：「全文」链接可访问名称不正确（%r，应为 %r）" %
+                    (title, got_label, expected))
+            if visible != "全文":
+                failures.append(
+                    "%s：「全文」链接可见文字应为「全文」，实为 %r" % (title, visible))
+            if 'href="stories/' not in attrs:
+                failures.append("%s：「全文」链接地址不像归档路径" % title)
+            link_checked += 1
+        if link_checked == 0:
+            failures.append("「全文」链接：没有找到 story-link，无法检查可访问名称")
+        link_distinct = len(set(link_names))
+        link_distinct_ok = link_distinct == len(link_names) and link_checked > 0
+        if not link_distinct_ok:
+            failures.append("「全文」链接：可访问名称存在重复，读屏用户无法区分")
+        print("[%s] 「全文」链接可访问名称：检查 %d 个，互不相同 %s" %
+              ("OK" if link_checked and link_distinct_ok else "FAIL",
+               link_checked, link_distinct_ok))
 
     if failures:
         print("\n测试失败：")
