@@ -28,6 +28,11 @@
     12. 记录的提交不在当前 HEAD 历史（本地 reset）时，不静默清理、不落进 no-change，
         保留记录并返回明确冲突；
     13. 若已确认该提交在目标远端，则清理记录、不报冲突。
+  F. Issue #3 复核 2026-10-10 下午 P0（本地 bare remote，不依赖公网）：
+    14. pending 必须在 push 之前原子落盘：在「记录已落盘、push 刚开始」处硬杀子进程，
+        记录仍存在，下一轮发现并只补推原 commit，不重建提交；
+    15. 记录损坏（截断 JSON / 非 JSON 对象）时失败封闭：push-pending-conflict、退出码 5，
+        不创建新提交、不清理原文件、不推送；dry-run 同样失败封闭且只读。
 
 用法：python3 scripts/test_publish_guard.py
 """
@@ -472,6 +477,86 @@ def test_pending_conflict_resolves_when_already_on_remote():
         shutil.rmtree(bare, ignore_errors=True)
 
 
+def test_pending_written_before_push_survives_kill():
+    """复核 2026-10-10 下午 P0：pending 必须在 push 之前原子落盘。
+
+    子进程跑到「记录已落盘、push 刚开始」时被硬杀（os._exit），
+    下一轮必须发现记录并只补推原 commit。
+    """
+    work, bare, branch = new_work_repo_with_remote()
+    try:
+        base_tip = git(bare, "rev-parse", "refs/heads/" + branch)
+        write(work, "daily.html", "<html>day1</html><p>kill-window</p>")
+        guard = os.path.join(REPO, "scripts", "publish_guard.py")
+        script = "\n".join([
+            "import importlib.util, os",
+            "spec = importlib.util.spec_from_file_location('pg', %r)" % guard,
+            "pg = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(pg)",
+            "def hard_kill(cwd, remote, branch, source_rev='HEAD'):",
+            "    os._exit(9)",
+            "pg._push = hard_kill",
+            "pg.publish('daily: kill-window', pg.PRESETS['daily'], %r, push=True)" % work,
+        ])
+        p = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+        check("子进程在 push 阶段被硬终止（exit 9）", p.returncode == 9, (p.returncode, p.stderr))
+        committed = git(work, "rev-parse", "HEAD")
+        rec = pg.load_pending(work)
+        check("硬终止后 pending 记录仍然存在", rec is not None, rec)
+        check("记录锁定刚创建的提交", bool(rec) and rec.get("commit") == committed,
+              (rec, committed))
+        check("硬终止时远端 tip 未前进",
+              git(bare, "rev-parse", "refs/heads/" + branch) == base_tip, base_tip)
+
+        n = commit_count(work)
+        res, code = pg.publish("daily: kill-window", DAILY, work, push=True)
+        tip = git(bare, "rev-parse", "refs/heads/" + branch)
+        check("下一轮不落进 no-change", res["result"] != "no-change", res)
+        check("下一轮补推到记录的提交", tip == committed, (tip, committed))
+        check("下一轮不重建提交", commit_count(work) == n, commit_count(work))
+        check("下一轮清理记录", pg.load_pending(work) is None, pg.load_pending(work))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
+def test_corrupt_pending_fails_closed():
+    """复核 2026-10-10 下午 P0：记录损坏时必须失败封闭。"""
+    work, bare, branch = new_work_repo_with_remote()
+    try:
+        base_tip = git(bare, "rev-parse", "refs/heads/" + branch)
+        sp = pg.state_path(work)
+        with open(sp, "w", encoding="utf-8") as f:
+            f.write('{"commit": "deadbeef"')
+        before = open(sp, "rb").read()
+        write(work, "daily.html", "<html>day1</html><p>corrupt</p>")
+        n0 = commit_count(work)
+
+        res, code = pg.publish("daily: corrupt", DAILY, work, push=True)
+        check("损坏记录 -> push-pending-conflict", res["result"] == "push-pending-conflict", res)
+        check("损坏记录 -> 退出码 5", code == pg.PUSH_CONFLICT_EXIT, code)
+        check("损坏记录不创建新提交", commit_count(work) == n0, commit_count(work))
+        check("损坏记录不被清理", open(sp, "rb").read() == before, open(sp, "rb").read())
+        check("损坏记录不推送",
+              git(bare, "rev-parse", "refs/heads/" + branch) == base_tip, base_tip)
+
+        res_dry, code_dry = pg.publish("daily: corrupt", DAILY, work, push=True, dry_run=True)
+        check("dry-run 也报 push-pending-conflict",
+              res_dry["result"] == "push-pending-conflict", res_dry)
+        check("dry-run 退出码 5", code_dry == pg.PUSH_CONFLICT_EXIT, code_dry)
+        check("dry-run 后损坏记录仍在", open(sp, "rb").read() == before)
+        check("dry-run 不新增提交", commit_count(work) == n0)
+
+        with open(sp, "w", encoding="utf-8") as f:
+            f.write("[1, 2, 3]")
+        res2, code2 = pg.publish("daily: corrupt", DAILY, work, push=True)
+        check("非对象记录也算损坏",
+              res2["result"] == "push-pending-conflict" and code2 == pg.PUSH_CONFLICT_EXIT, res2)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bare, ignore_errors=True)
+
+
 def main():
     test_presets()
     test_daily_flow()
@@ -485,6 +570,8 @@ def main():
     test_pending_on_other_branch_not_pushed()
     test_pending_conflict_keeps_state_after_reset()
     test_pending_conflict_resolves_when_already_on_remote()
+    test_pending_written_before_push_survives_kill()
+    test_corrupt_pending_fails_closed()
     print()
     if FAILED:
         print("FAILED: %d 项 -> %s" % (len(FAILED), ", ".join(FAILED)))

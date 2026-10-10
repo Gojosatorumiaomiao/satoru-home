@@ -33,7 +33,15 @@ tree 完全相同，是一个**空提交**，只制造历史噪声，并可能�
    - 记录中的提交已不在当前分支历史（切分支 / detached HEAD / 本地 reset）时，**不静默清理**：
      先用 `git ls-remote` 确认它是否已在目标远端分支，已确认才清理；否则返回
      `push-pending-conflict`（退出码 5）要求人工处理。
-   （按 Issue #3 复核 2026-10-09 夜间 与 2026-10-10 早间 P0 修正。）
+     （按 Issue #3 复核 2026-10-09 夜间 与 2026-10-10 早间 P0 修正。）
+   - **先落盘、再推送**：提交通过空提交复核后，先把 `{commit, branch, remote}` 用
+     同目录临时文件 + flush/fsync + `os.replace` **原子写入**，然后才推送该确切提交；
+     推送成功才清理记录。这样即使 `git push` 挂起时进程被直接终止（异常处理不运行），
+     记录也已存在，下一轮仍能发现并只补推原 commit。
+   - **损坏记录失败封闭**：记录文件存在但不可读 / 不是合法 JSON 对象时，返回
+     `push-pending-conflict`（退出码 5），**不当作「没有 pending」**，也不清理原文件、
+     不创建新提交。
+     （按 Issue #3 复核 2026-10-10 下午 P0 修正。）
 
 用途
 ----
@@ -65,6 +73,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 PRESETS = {
     # 增量发布日常动态时，sync_content.py 只写这两个文件。
@@ -161,20 +170,58 @@ def state_path(cwd):
     return os.path.join(git_dir, "publish_guard_pending.json")
 
 
-def load_pending(cwd):
-    p = state_path(cwd)
-    if not os.path.exists(p):
-        return None
+def _pending_state_at(path):
+    """读取指定路径的待推送状态：("absent"|"ok"|"corrupt", data)。
+
+    文件不存在 -> ("absent", None)；合法 JSON 对象 -> ("ok", dict)；
+    文件存在但不可读 / 不是合法 JSON / 不是 JSON 对象 -> ("corrupt", None)。
+    绝不把损坏记录当成「没有 pending」（Issue #3 复核 2026-10-10 下午 P0）。
+    """
+    if not os.path.exists(path):
+        return "absent", None
     try:
-        with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return "corrupt", None
+    if not isinstance(data, dict):
+        return "corrupt", None
+    return "ok", data
+
+
+def pending_state(cwd):
+    """当前仓库的待推送状态，区分 absent / ok / corrupt 三种情况。"""
+    return _pending_state_at(state_path(cwd))
+
+
+def load_pending(cwd):
+    """兼容旧调用：合法记录返回 dict，其余（不存在或损坏）返回 None。"""
+    status, data = pending_state(cwd)
+    return data if status == "ok" else None
 
 
 def save_pending(cwd, data):
-    with open(state_path(cwd), "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
+    """原子写入待推送状态：同目录临时文件 -> flush + fsync -> os.replace。
+
+    保证「写入过程中进程被终止」不会留下半截 JSON 被误读
+    （Issue #3 复核 2026-10-10 下午 P0）。
+    """
+    path = state_path(cwd)
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".publish_guard_pending.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        raise
 
 
 def clear_pending(cwd):
@@ -231,8 +278,14 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
         # 只读探测：不调用 git add，不改动索引，也不重试推送
         # （Issue #3 复核 2026-10-09 午后 P0）。
         changed = pending_changes(cwd, paths)
-        pend = load_pending(cwd)
-        if pend:
+        pend_status, pend = pending_state(cwd)
+        if pend_status == "corrupt":
+            # 记录存在但损坏：dry-run 也只读地失败封闭，不清理、不新建提交。
+            out["result"] = "push-pending-conflict"
+            out["pending_push"] = True
+            out["note"] = "待推送记录存在但不可读/格式损坏，需人工处理（dry-run 只读，不清理）"
+            return out, PUSH_CONFLICT_EXIT
+        if pend_status == "ok":
             out["pending_push"] = True
             out["pending_commit"] = pend.get("commit")
         if not changed:
@@ -245,8 +298,15 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
     #    （Issue #3 复核 2026-10-09 夜间 P0）：不能把它当作普通 no-change，
     #    要在比较工作区之前先重试推送。
     pending_resolved = False
-    pend = load_pending(cwd)
-    if pend:
+    pend_status, pend = pending_state(cwd)
+    if pend_status == "corrupt":
+        # 记录存在但不可读 / 不是合法对象：失败封闭，不当作「没有 pending」，
+        # 不创建新提交、不清理原文件（Issue #3 复核 2026-10-10 下午 P0）。
+        out["result"] = "push-pending-conflict"
+        out["pending_push"] = True
+        out["note"] = "待推送记录存在但不可读/格式损坏，需人工处理；保留原文件、不新建提交"
+        return out, PUSH_CONFLICT_EXIT
+    if pend_status == "ok":
         commit = pend.get("commit")
         branch = pend.get("branch")
         pending_remote = pend.get("remote") or remote
@@ -326,16 +386,20 @@ def publish(message, paths, cwd, push=False, remote="origin", dry_run=False):
     out["result"] = "published"
     if push:
         branch = current_branch(cwd)
+        # 先原子落盘「已提交、推送未确认」记录，再推送该确切提交：
+        # 这样即使 push 挂起时进程被直接终止（异常处理不会运行），记录也已存在，
+        # 下一轮仍能发现并只补推这个 commit（Issue #3 复核 2026-10-10 下午 P0）。
+        save_pending(cwd, {"commit": out["commit"], "branch": branch, "remote": remote})
         try:
-            _push(cwd, remote, branch)
+            _push(cwd, remote, branch, source_rev=out["commit"])
         except PublishError as e:
-            # 提交已创建、推送未确认：保留 commit，记录待推送状态，
-            # 下一次运行先补推，绝不落进普通 no-change（Issue #3 复核 2026-10-09 夜间 P0）。
-            save_pending(cwd, {"commit": out["commit"], "branch": branch, "remote": remote})
+            # 推送未确认：保留记录与 commit，下一次运行先补推，
+            # 绝不落进普通 no-change（Issue #3 复核 2026-10-09 夜间 P0）。
             out["result"] = "push-pending"
             out["pending_push"] = True
             out["push_error"] = str(e)
             return out, PENDING_EXIT
+        clear_pending(cwd)
         out["pushed"] = True
     return out, 0
 
