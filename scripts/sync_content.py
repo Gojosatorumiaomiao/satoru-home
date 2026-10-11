@@ -351,45 +351,53 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
 
     head, body, tail = s[:i + len(D_START)], s[i + len(D_START):j], s[j:]
 
-    # 收集已有条目：按锚点拆块，保留其它日期的原样
-    existing = {}
-    other_blocks = []
+    # 收集已有条目：连同「<article> 之前的行首缩进」一起保留。
+    # 旧实现只把 <article>…</article> 当作块，块与块之间的缩进落在匹配之外，
+    # 重组时又用 "\n".join 重排，于是每次新增日期都会把所有历史条目的行首
+    # 缩进（例如六个空格）抹成行首，产生与内容无关、只改格式的 diff。
+    # 现在把行首缩进当作块的一部分保存，重组时逐字节还原。
+    existing = {}       # 锚点 -> (行首缩进, 块)
+    other_blocks = []   # [(行首缩进, 块), ...]，其它日期原样保留
+    prev = 0
     for m in re.finditer(r'<article class="post" id="([^"]+)">.*?</article>',
                          body, re.S):
-        block, aid = m.group(0), m.group(1)
+        lead, block, aid = body[prev:m.start()], m.group(0), m.group(1)
+        prev = m.end()
         # 兼容两种锚点：新的 daily-<date>-<HHMM> 与旧的 daily-<date>
         if aid == "daily-%s" % date or aid.startswith("daily-%s-" % date):
             # 从锚点取出时刻，便于与源数据比对
-            existing[aid] = block
+            existing[aid] = (lead, block)
         else:
-            other_blocks.append(block)
+            other_blocks.append((lead, block))
+    # 末条目与 D_END 之间的原文（换行 + 收尾缩进）同样原样保留
+    trailer = body[prev:]
 
     added = updated = 0
-    day_blocks = []
+    day_items = []
     for t, text in todo:
         aid = entry_id(date, t)
         new_block = render_daily_entry(date, t, text)
         if aid in existing:
-            if existing[aid].strip() != new_block.strip():
+            if existing[aid][1].strip() != new_block.strip():
                 updated += 1
-            day_blocks.append(new_block)
         else:
-            day_blocks.append(new_block)
             added += 1
+        # render_daily_entry() 已带六空格行首缩进，这里只补一个换行分隔，
+        # 保证重排后该条目的最终字节与既有规范格式一致。
+        day_items.append(("\n", new_block))
         existing.pop(aid, None)
 
     # 当天已存在但源数据里没有的条目（如状态被回滚）保留，避免静默删内容
-    for aid, block in existing.items():
-        day_blocks.append(block)
+    for aid, item in existing.items():
+        day_items.append(item)
 
-    # 当天条目按时间排序置于顶部，其余日期条目保持原有顺序在后
-    day_blocks.sort(key=lambda b: re.search(r'<time>([^<]+)</time>', b).group(1))
-    newbody = "\n" + "\n".join(day_blocks)
-    if other_blocks:
-        newbody += "\n" + "\n".join(other_blocks)
-    newbody += "\n"
+    # 当天条目按时间排序置于顶部，其余日期条目保持原有顺序与字节在后
+    day_items.sort(key=lambda it: re.search(r'<time>([^<]+)</time>',
+                                            it[1]).group(1))
+    newbody = "".join(lead + block for lead, block in day_items + other_blocks)
+    newbody += trailer
 
-    open(path, "w", encoding="utf-8").write(head + newbody + "    " + tail)
+    open(path, "w", encoding="utf-8").write(head + newbody + tail)
 
     if newly:
         log.setdefault(date, [])
