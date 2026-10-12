@@ -256,6 +256,13 @@ def run():
         ok, why = sc.scan_public_text(txt)
         check("不误伤：%s" % txt, ok, why)
 
+    # 站内已真实出现过的内部标签「悟在想」必须被稳定拦截，且不依赖本机词表
+    # 是否恰好收录它（样例完全虚构，只断言类别，不依赖具体文案）。
+    for txt in ("【悟在想】虚构测试", "【 悟在想 】虚构测试"):
+        ok, why = sc.scan_public_text(txt)
+        check("站内内部标签被拦截：%s" % txt,
+              (not ok) and why == "internal-marker", why)
+
     # WSL 规则的负例：只有 /mnt/<盘符>/ 但没有 Users/<用户>/ 段的路径不算
     # 家目录，不应被当作本机路径拦下（控制误报）。
     for txt in ("/mnt/c/Program Files", "/mnt/data/logs", "/mnt/c/Users",
