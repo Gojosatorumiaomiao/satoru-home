@@ -1,0 +1,19 @@
+#!/bin/sh
+# 阻止空提交：暂存区与 HEAD 无差异时拒绝创建提交。
+#
+# 背景：2026-10-08 20:00 的 fd22c1b 是一个 tree 与父提交完全相同的空提交
+# （tree b450a64 == b450a64），只制造历史噪声。详见 scripts/publish_guard.py。
+#
+# 安装（在本机克隆里，属本地配置，不入库）：
+#   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+#
+# 说明：只能拦住本机 git 提交；走 GitHub API 直接更新 ref 的路径不受影响，
+# 那条路径靠 scripts/publish_guard.py 的提交前最终树比较兜底。
+if git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  if git diff --cached --quiet; then
+    echo "pre-commit: 拒绝空提交（暂存区与 HEAD 无差异）。" >&2
+    echo "pre-commit: 发布流程不应产生空提交；如确需空提交请显式使用 --no-verify。" >&2
+    exit 1
+  fi
+fi
+exit 0
