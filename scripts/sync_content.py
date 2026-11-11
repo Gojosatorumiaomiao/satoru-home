@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import datetime
 
 WS = "/home/hyr/.openclaw/workspace"
@@ -32,6 +33,10 @@ SITE = os.path.join(WS, "sites", "satoru-home")
 SRC_STORIES = os.path.join(WS, "stories")
 DAILY_JSON = os.path.join(WS, "data", "satoru-daily.json")
 OUT_STORIES = os.path.join(SITE, "stories")
+
+# 公开文本禁词表：真实词表只留本机，不进仓库。
+# 可用环境变量 SATORU_BLOCKLIST 覆盖路径（测试用）。
+BLOCKLIST_FILE = os.path.join(WS, "data", "public-blocklist.txt")
 
 # 页面中需要替换的区块，用注释锚点标记
 A_START = "<!-- stories:list:start -->"
@@ -41,6 +46,11 @@ D_END = "<!-- daily:list:end -->"
 
 # 归档文件名：<date>.md / <date>-2.md / <date>-3.md（一天可有多篇）
 ARCHIVE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-(\d+))?\.md$")
+
+# 时刻格式：HH:MM（24 小时制）。动态条目的锚点 = 日期 + 时刻
+# （entry_id 去掉冒号），因此缺失/空白/非法时刻会直接产出坏锚点
+# （如 daily-2026-09-21-）并把空串写进发布账本，必须在校验阶段跳过。
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def html_escape(t):
@@ -131,33 +141,202 @@ def daily_state_for(state, date):
     return state, None
 
 
+# 匹配前先去掉的零宽 / 双向控制字符（规范化副本专用，不影响发布正文）。
+_SCAN_DROP_CHARS = (
+    "\u200b"  # zero width space
+    "\u200c"  # zero width non-joiner
+    "\u200d"  # zero width joiner
+    "\u2060"  # word joiner
+    "\ufeff"  # zero width no-break space
+    "\u180e"  # mongolian vowel separator
+    "\u00ad"  # soft hyphen
+    "\u200e\u200f"      # LRM / RLM
+    "\u202a\u202b\u202c\u202d\u202e"  # 双向嵌入/覆盖
+    "\u2066\u2067\u2068\u2069"        # 双向隔离
+)
+# 保留的空白与换行（不当作控制字符删除）
+_SCAN_KEEP_WS = "\t\n\r"
+
+# 通用类型检测规则（只含通用模式，不含任何真实姓名/单位/地址/行程/样本）。
+# 顺序即优先级；命中的 reason 只给类别，不回显原文。
+_TYPE_RULES = (
+    # 邮箱
+    ("email", re.compile(
+        r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
+    # 手机号（中国大陆 11 位，1 开头，第二位 3-9）
+    ("phone", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
+    # 带分隔的固话/座机（区号-号码，或号码带连字符）
+    ("phone", re.compile(r"(?<!\d)0\d{2,3}-\d{7,8}(?!\d)")),
+    # 凭据格式：常见密钥前缀
+    ("credential", re.compile(
+        r"(?i)\b(?:sk|pk|ghp|gho|ghu|ghs|github_pat|AKIA|ASIA|xox[baprs])"
+        r"[_\-][A-Za-z0-9_\-]{12,}")),
+    # 凭据格式：Bearer / token / key 等键值，或 Bearer 后跟长串
+    ("credential", re.compile(
+        r"(?i)\bbearer\s+[A-Za-z0-9._\-]{12,}")),
+    ("credential", re.compile(
+        r"(?i)\b(?:token|api[_\-]?key|secret|password|passwd|pwd)"
+        r"\s*[:=]\s*\S{6,}")),
+    # 本机绝对路径（家目录 / 系统目录）
+    ("local-path", re.compile(
+        r"(?:/home/[A-Za-z0-9._\-]+|/Users/[A-Za-z0-9._\-]+|/root"
+        r"|[A-Za-z]:\\Users\\[A-Za-z0-9._\-]+)")),
+    # WSL 下访问 Windows 侧家目录的写法：/mnt/<盘符>/Users/<用户>/…
+    # 说明：规范写法 /mnt/c/Users/<name> 其实已被上一条的 /Users/<name>
+    # 子串命中；真正漏掉的是大小写变体（Windows 文件系统不区分大小写，
+    # 如 /mnt/c/users/<name>）。本规则显式、且忽略大小写。
+    ("local-path", re.compile(
+        r"/mnt/[A-Za-z]/Users/[A-Za-z0-9._\-]+", re.IGNORECASE)),
+    # IPv4：只在**有网络语境**时拦，避免把裸写的版本号 1.2.3.4
+    # 一类正常文案误判（用户要求控制误报）。要求前面出现
+    # IP/地址/服务器/端口/host 等提示词，或值出现在 URL 中。
+    ("ip-address", re.compile(
+        r"(?i)(?:ip|地址|服务器|主机|端口|host|server|address)\s*[:：=\s]\s*"
+        r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)"
+        r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)){3}"
+        r"(?![A-Za-z0-9.])")),
+    ("ip-address", re.compile(
+        r"(?<![A-Za-z0-9.])"
+        r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)"
+        r"(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|[1-9]|0)){3}"
+        r"(?:(?::\d{1,5})|(?:/\d{1,2}))(?![A-Za-z0-9.])")),
+)
+
+# 已定义的内部标记模式（**不粗暴拦截所有【……】**，只认这些前缀），
+# 避免误伤「【今日推荐】」这类正常括号文案。
+_INTERNAL_MARKER_RE = re.compile(
+    r"【\s*(?:内部|私人|私密|仅内部|勿公开|请勿公开|do\s*not\s*publish"
+    r"|internal|private)\s*[^】]{0,40}】",
+    re.IGNORECASE,
+)
+
+
+def normalize_for_scan(text):
+    """生成**只用于禁词匹配**的规范化副本。
+
+    1. NFKC：把全角/兼容字符折成基本形式（ＳＥＣＲＥＴ -> SECRET）；
+    2. 去掉零宽与双向控制字符（含 U+200B 等），
+       避免「绝<U+200B>密代号」这类可见相同的写法绕过子串匹配。
+
+    发布正文一律使用原文，**不用**这个副本改写公开内容。
+    只做匹配，不回显命中的禁词或命中位置。
+    """
+    out = []
+    for ch in unicodedata.normalize("NFKC", text or ""):
+        if ch in _SCAN_DROP_CHARS:
+            continue
+        if ch not in _SCAN_KEEP_WS and unicodedata.category(ch) in ("Cc", "Cf", "Cs"):
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def scan_public_text(text):
+    """扫描待公开文本。返回 (ok, reason)。
+
+    禁词表是本机文件，不进仓库（见 docs：真实禁词表只留本机）。
+    读取顺序：环境变量 SATORU_BLOCKLIST 指定的路径；否则
+    workspace/data/public-blocklist.txt（本机、已 gitignore）。
+    两个位置都没有时 **不是“通过”** —— 扫描无法进行，
+    返回 ok=False 让调用方跳过并报告，不静默放行。
+
+    匹配前对**副本**做 NFKC 规范化并去掉零宽/控制字符（见
+    normalize_for_scan），因此全角或插入零宽的相同写法同样会被拦下；
+    发布正文仍保留 public_text 原文，不做任何改写。
+    返回的 reason 只给类别（blocked / email / phone / ... / no-blocklist），
+    **不回显命中的原文、真实禁词或位置**。
+
+    两层检测：
+      1. 本机禁词子串（真实人名/单位/地址/行程/私人词，只在本机词表）；
+      2. 通用类型规则 _TYPE_RULES + 内部标记模式 _INTERNAL_MARKER_RE
+         —— 邮箱、手机号、凭据、本机绝对路径、IP。这些是通用模式，
+         不含任何真实样本，可以公开。
+
+    范围说明：当前仅被日常动态条目调用（daily_entries_for -> sync_daily）；
+    故事归档路径不经过本函数。
+    """
+    path = os.environ.get("SATORU_BLOCKLIST") or BLOCKLIST_FILE
+    if not os.path.isfile(path):
+        return False, "no-blocklist"
+    try:
+        raw = open(path, encoding="utf-8").read()
+    except Exception as exc:
+        return False, "blocklist-error:%s" % exc.__class__.__name__
+    terms = []
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        n = normalize_for_scan(s)
+        if n:
+            terms.append(n)
+    if not terms:
+        return False, "blocklist-empty"
+
+    # 所有检测都跑在规范化副本上；发布正文始终是 public_text 原文。
+    probe = normalize_for_scan(text)
+
+    for term in terms:
+        if term.lower() in probe.lower():
+            return False, "blocked"
+
+    for reason, rx in _TYPE_RULES:
+        if rx.search(probe):
+            return False, reason
+
+    if _INTERNAL_MARKER_RE.search(probe):
+        return False, "internal-marker"
+
+    return True, "ok"
+
+
+def valid_time(t):
+    """时刻必须是 HH:MM（24 小时制），否则无法生成合法锚点。
+
+    缺失（键不存在）、空白串与非法写法（如 "25:99"、"9:00 " 之外的
+    "9"、"9.00"）一律判为无效。main 也在此处过滤，本 PR 的闸门改写
+    曾把这一步丢掉，属于回归。
+    """
+    return bool(_TIME_RE.match(t))
+
+
 def daily_entries_for(state, date):
-    """取当天所有适合公开的动态条目，按时间排序。
+    """取当天可发布的动态条目，按时间排序。
 
-    每条返回 (time, text, screened)。一天可有多条；用 time 作为条目锚点。
+    每条返回 (time, text) 或 (time, None) —— 后者表示该条被闸门拦下。
 
-    screened 表示该条是否来自明确标记为"可公开"的来源：
-    优先取 contact["public_text"]；没有则退回 contact["summary"]，
-    此时 screened=False —— 行为不变，但调用方应把它计入未筛选数量并报警。
+    闸门规则（用户指定）：明确公开的 public_text → 扫描 → 发布。
+      - 时刻缺失/空白/非法（非 HH:MM）        -> 跳过并报告 invalid-time
+      - 没有 public_text（只有内部 summary）  -> 跳过并报告
+      - 扫描命中禁词                        -> 跳过并报告
+      - 禁词表缺失/不可读/为空（无法扫描）    -> 跳过并报告
+    被跳过的条目 **不消耗发布名额**，也不影响已有页面；
+    返回的 reason 只给类别，不回显正文。
     """
     if not state:
-        return []
+        return [], []
     contacts = state.get("contacts") or []
-    out = []
+    out, skipped = [], []
     for c in contacts:
         if c.get("kind") != "normal":
             continue
         t = (c.get("time") or "").strip()
-        public = (c.get("public_text") or "").strip()
-        if public:
-            text, screened = public, True
-        else:
-            text, screened = (c.get("summary") or "").strip(), False
-        if not t or not text:
+        # 先校验时刻：坏时刻即使有合格 public_text 也会生成坏锚点/坏账本
+        if not valid_time(t):
+            skipped.append({"time": t, "reason": "invalid-time"})
             continue
-        out.append((t, text, screened))
+        public = (c.get("public_text") or "").strip()
+        if not public:
+            skipped.append({"time": t, "reason": "no-public-text"})
+            continue
+        ok, why = scan_public_text(public)
+        if not ok:
+            skipped.append({"time": t, "reason": why})
+            continue
+        out.append((t, public))
+
     out.sort(key=lambda x: x[0])
-    return out
+    return out, skipped
 
 
 def story_slug(date, title, index):
@@ -246,11 +425,10 @@ def render_daily_entry(date, t, text):
 
 def render_daily_list(state, date):
     """渲染当天全部动态条目。同一天多条分别保留。"""
-    entries = daily_entries_for(state, date)
+    entries, _skipped = daily_entries_for(state, date)
     if not entries:
         return None
-    return "\n".join(render_daily_entry(date, t, text)
-                     for t, text, _screened in entries)
+    return "\n".join(render_daily_entry(date, t, text) for t, text in entries)
 
 
 MAX_PER_DAY = 6      # 每天最多发布的动态条数
@@ -299,20 +477,24 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     - 同一时刻重跑时原位更新，不新增重复条目。
     - 不删除其它日期的条目。
     - 已发布时刻记录在 daily-published.json，不依赖页面反推。
-    返回 (action, added, updated, unscreened)。
+    返回 (action, added, updated, skipped)。
 
     所有返回路径都必须给出四项，否则调用方在生成报告前就会解包失败：
     早退（no-entry / no-anchor）用空列表占位第四项。
+
+    skipped 是被闸门拦下的条目（缺 public_text / 命中禁词 / 无法扫描）。
+    它们**不消耗发布名额**：发布游标只按已记账的条目推进，
+    不被跳过项占位；当天页面上已有内容也不受影响。
     """
-    all_entries = daily_entries_for(state, date)
+    all_entries, skipped = daily_entries_for(state, date)
     if not all_entries:
-        return "no-entry", 0, 0, []
+        return "no-entry", 0, 0, skipped
 
     s = open(path, encoding="utf-8").read()
     i = s.find(D_START)
     j = s.find(D_END)
     if i == -1 or j == -1:
-        return "no-anchor", 0, 0, []
+        return "no-anchor", 0, 0, skipped
 
     log = load_published_log()
     # 记账是唯一真相：某时刻一旦记过，就不再当作新条目。
@@ -321,33 +503,25 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
     recorded = set(log.get(date, []))
     on_page = published_times(path, date)
 
-    # 方案 1（按时段顺序配对）：当天第 N 次运行发布第 N 条。
-    # 不再按“最新未发布”取条目，也不从页面反推序号——
-    # 而是以记账长度为游标：记了 k 条，下次就发第 k+1 条。
-    # 这样六个时段各自对应一条，某次失败不会导致后续错位或超发。
-    k = len(recorded)
-
-    # C 方案：行为不变，但统计有多少条来自未筛选的内部摘要，
-    # 由调用方在报告里计数并报警，不静默当作已授权公开文案。
-    unscreened = [t for t, _text, screened in all_entries if not screened]
-
-    # 待写入：记账里已有的只做原位更新
+    # 游标口径：用**稳定时刻**判断是否已发布，不用过滤后的数组下标。
+    # 过滤结果会随 public_text 补齐 / 禁词表变化而改变，
+    # 若拿「过滤后下标 == 记账长度」配对，早时段条目被过滤过一次之后
+    # 下标永远对不上，就再也发不出去（复核已复现）。
+    # 改为：从「合格且未记账」的条目里按时间取最早一条。
+    # 已记过的不再当新条目，已撤下的记录也不复活。
     todo = []
     newly = []
-    for idx, (t, text, _screened) in enumerate(all_entries):
+    for t, text in all_entries:
         if t in recorded:
             # 已发布过：页面还在就原位刷新，不在就不复活
             if t in on_page:
                 todo.append((t, text))
-            continue
-        # 只取“下一条待发布”对应的那一条（方案 1）
-        if idx != k:
-            continue
-        if len(recorded) >= max_per_day:
-            continue
+    # 每次最多新增一条（all_entries 已按时间排序）；每天不超过 max_per_day 条
+    pending = [(t, text) for t, text in all_entries if t not in recorded]
+    if pending and len(recorded) < max_per_day:
+        t, text = pending[0]
         todo.append((t, text))
         newly.append(t)
-        break
 
     head, body, tail = s[:i + len(D_START)], s[i + len(D_START):j], s[j:]
 
@@ -398,7 +572,7 @@ def sync_daily(path, date, state, max_new=1, max_per_day=MAX_PER_DAY):
                 log[date].append(t)
         log[date].sort()
         save_published_log(log)
-    return "ok", added, updated, unscreened
+    return "ok", added, updated, skipped
 
 
 def replace_block(path, start, end, inner):
@@ -510,26 +684,27 @@ def main():
         report["daily_error"] = err
     else:
         daily_html = os.path.join(SITE, "daily.html")
-        action, added, updated, unscreened = sync_daily(daily_html, date, state)
+        action, added, updated, skipped = sync_daily(daily_html, date, state)
         if action == "no-anchor":
             report["steps"].append("daily.html 缺少锚点，未更新")
         elif action == "no-entry":
-            report["steps"].append("当天没有可公开的动态条目")
+            report["steps"].append("当天没有可发布的公共成稿")
         else:
             report["steps"].append(
                 "daily.html 已同步：新增 %d 条，更新 %d 条" % (added, updated))
             report["daily_added"] = added
             report["daily_updated"] = updated
-            # C 方案：不阻断发布，但把未筛选来源数量报出来
-            if unscreened:
-                report["unscreened_internal"] = len(unscreened)
-                report["steps"].append(
-                    "警告：%d 条来自内部摘要 summary（未标记 public_text），"
-                    "未经公开筛选：%s" % (len(unscreened), ", ".join(unscreened)))
             if added or updated:
                 report["changed"] = True
             else:
                 report["steps"].append("本时段已发布，跳过")
+
+        # 闸门拦下的条目：跳过并报告，不消耗名额、不动已有页面
+        if skipped:
+            report["skipped"] = skipped
+            for item in skipped:
+                report["steps"].append(
+                    "跳过 %s：%s" % (item["time"] or "(无时刻)", item["reason"]))
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
