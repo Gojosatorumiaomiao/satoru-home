@@ -42,6 +42,15 @@ sc.OUT_STORIES = sc.SITE + "/stories"
 # 不改写就会把虚构日期写进仓库真实的 data/daily-published.json。
 sc.PUBLISHED_LOG = TMP + "/data/daily-published.json"
 
+# 禁词表也必须指向临时目录，并**显式注入本脚本自建的虚构词表**：
+# BLOCKLIST_FILE 是导入时求值的常量，只改 sc.WS 不会改它；
+# 而 SATORU_BLOCKLIST 优先级更高，不覆盖就会把操作者本机词表或外部环境带进来。
+FAKE_BLOCKLIST = TMP + "/data/fictional-blocklist.txt"
+with open(FAKE_BLOCKLIST, "w", encoding="utf-8") as fh:
+    fh.write("# 虚构禁词表（本脚本自建，非真实词表）\nFICTIONSECRET\n")
+sc.BLOCKLIST_FILE = FAKE_BLOCKLIST
+os.environ["SATORU_BLOCKLIST"] = FAKE_BLOCKLIST
+
 DATE = "2099-01-01"
 lead = ("虚构首段：这一段刻意超过八十八个字符，用来确认端到端跑一遍同步脚本之后，"
         "页面上仍然能读到首段结尾的每一个字，而不是被旧实现的八十八字符截断点吞掉。"
@@ -51,7 +60,9 @@ with open(os.path.join(sc.SRC_STORIES, DATE + ".md"), "w", encoding="utf-8") as 
     fh.write("# %s 端到端样例\n\n%s\n" % (DATE, "\n\n".join(paras)))
 with open(sc.DAILY_JSON, "w", encoding="utf-8") as fh:
     json.dump({"date": DATE, "contacts": [
-        {"kind": "normal", "time": "09:00", "summary": "虚构动态：早上在窗边翻笔记。"}]},
+        {"kind": "normal", "time": "09:00",
+         "summary": "虚构内部摘要",
+         "public_text": "虚构公开动态：早上在窗边翻笔记。"}]},
         fh, ensure_ascii=False)
 
 sys.argv = ["sync_content.py", DATE]
