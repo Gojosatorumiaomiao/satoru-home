@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# 公开文本禁词表（本机专用，绝不进仓库）
+data/public-blocklist.txt
